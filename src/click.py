@@ -46,6 +46,11 @@ def find_and_click(driver, selectors, wait_seconds: int = 20):
             print("Trying selector:", sel)
             elem = wait.until(EC.element_to_be_clickable((by, sel)))
             print("Found element text:", getattr(elem, 'text', ''))
+            try:
+                outer = driver.execute_script("return arguments[0].outerHTML.slice(0,200);", elem)
+            except Exception:
+                outer = None
+            print("Found element snippet:", outer)
             # scroll into view and try native click first
             driver.execute_script("arguments[0].scrollIntoView(true);", elem)
             # Try a sequence of click methods until one appears to work (i.e. page navigates
@@ -54,6 +59,19 @@ def find_and_click(driver, selectors, wait_seconds: int = 20):
             click_methods.append(('native', lambda e: e.click()))
             click_methods.append(('actionchains', lambda e: ActionChains(driver).move_to_element(e).click(e).perform()))
             click_methods.append(('js', lambda e: driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", e)))
+            # Try a JS click targeted at the element's center (some handlers rely on coordinates)
+            def js_center_click(e):
+                driver.execute_script(
+                    "var r = arguments[0].getBoundingClientRect();"
+                    "var cx = r.left + r.width/2; var cy = r.top + r.height/2;"
+                    "arguments[0].dispatchEvent(new MouseEvent('mousemove', {clientX: cx, clientY: cy, bubbles: true}));"
+                    "arguments[0].dispatchEvent(new MouseEvent('mousedown', {clientX: cx, clientY: cy, bubbles: true}));"
+                    "arguments[0].dispatchEvent(new MouseEvent('mouseup', {clientX: cx, clientY: cy, bubbles: true}));"
+                    "arguments[0].dispatchEvent(new MouseEvent('click', {clientX: cx, clientY: cy, bubbles: true}));",
+                    e
+                )
+
+            click_methods.append(('js_center', js_center_click))
 
             for name, fn in click_methods:
                 try:
