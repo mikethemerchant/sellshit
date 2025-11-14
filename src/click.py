@@ -179,19 +179,14 @@ def fill_category_field(driver, category: str, wait_seconds: int = 12):
     """
     wait = WebDriverWait(driver, wait_seconds)
 
-    # Split hierarchical categories on ';'
-    segments = [seg.strip() for seg in category.split(';') if seg.strip()]
-    if not segments:
-        segments = [category.strip()]
-
+    # Always select 'Miscellaneous' for category
+    target_category = 'Miscellaneous'
     try:
-        # Find a Category combobox-like opener and click to open
         opener_selectors = [
             "//label[@role='combobox' and .//span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'category')]]",
             "//*[@role='combobox' and (contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'category') or .//span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'category')])]",
             "//label[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'category')]/following::*[@role='combobox'][1]",
         ]
-
         opener = None
         last_err = None
         for xpath in opener_selectors:
@@ -204,80 +199,23 @@ def fill_category_field(driver, category: str, wait_seconds: int = 12):
                 continue
         if opener is None:
             raise last_err or Exception("Category combobox not found")
-
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opener)
         opener.click()
         time.sleep(0.2)
-
-        # For each segment, choose an option from the current listbox/popover
-        for idx, seg in enumerate(segments):
-            seg_lower = seg.lower().replace("'", "\'")
-
-            # Ensure a listbox is present; if not, click to open
-            try:
-                WebDriverWait(driver, 4).until(lambda d: d.find_elements(By.XPATH, "//*[@role='listbox']"))
-            except Exception:
-                try:
-                    opener.click()
-                    WebDriverWait(driver, 4).until(lambda d: d.find_elements(By.XPATH, "//*[@role='listbox']"))
-                except Exception:
-                    pass
-
-            print(f"[DEBUG] Selecting category segment {idx+1}/{len(segments)}: '{seg}'")
-
-            # First attempt: type into active combobox input to filter, then click the matching option
-            try:
-                active = driver.switch_to.active_element
-                try:
-                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", active)
-                except Exception:
-                    pass
-                active.send_keys(Keys.CONTROL + 'a')
-                active.send_keys(Keys.DELETE)
-                time.sleep(0.1)
-                active.send_keys(seg)
-                time.sleep(0.2)
-                # Try to click the filtered option explicitly
-                opt_after_type = WebDriverWait(driver, 4).until(EC.element_to_be_clickable((
-                    By.XPATH,
-                    f"//*[@role='listbox']//*[@role='option'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{seg_lower}')]"
-                )))
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opt_after_type)
-                try:
-                    opt_after_type.click()
-                except Exception:
-                    driver.execute_script("arguments[0].click();", opt_after_type)
-                time.sleep(0.3)
-                # Proceed to next segment if this succeeds
-                continue
-            except Exception:
-                # Fall back to clicking an option below
-                pass
-            option_selectors = [
-                f"//*[@role='listbox']//*[@role='option'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{seg_lower}')]",
-                f"//*[contains(@id,'mount') or @role='dialog' or @role='menu' or @role='listbox']//*[@role='option' or @role='menuitem' or @role='button'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{seg_lower}')]",
-                f"//span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{seg_lower}')]/ancestor::*[@role='option' or @role='menuitem' or @role='button'][1]",
-            ]
-
-            opt = None
-            last_opt_err = None
-            for ox in option_selectors:
-                try:
-                    opt = WebDriverWait(driver, 6).until(EC.element_to_be_clickable((By.XPATH, ox)))
-                    break
-                except Exception as oe:
-                    last_opt_err = oe
-                    continue
-            if opt is None:
-                raise last_opt_err or Exception("Category option not found")
-
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opt)
-            try:
-                opt.click()
-            except Exception:
-                driver.execute_script("arguments[0].click();", opt)
-            time.sleep(0.2)
-
+        # Type 'Miscellaneous' and select it
+        active = driver.switch_to.active_element
+        active.send_keys(Keys.CONTROL + 'a')
+        active.send_keys(Keys.DELETE)
+        time.sleep(0.1)
+        active.send_keys(target_category)
+        time.sleep(0.2)
+        opt = WebDriverWait(driver, 6).until(EC.element_to_be_clickable((By.XPATH, f"//*[@role='listbox']//*[@role='option'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{target_category.lower()}')]")))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opt)
+        try:
+            opt.click()
+        except Exception:
+            driver.execute_script("arguments[0].click();", opt)
+        time.sleep(0.2)
         # Close dropdown and blur to trigger validation
         try:
             driver.switch_to.active_element.send_keys(Keys.ESCAPE)
@@ -287,7 +225,6 @@ def fill_category_field(driver, category: str, wait_seconds: int = 12):
             driver.execute_script("if(document.activeElement){document.activeElement.blur();}")
         except Exception:
             pass
-
         # Optional: verify Next becomes enabled (do not click it here)
         try:
             next_btn = driver.find_element(By.XPATH, "//div[@role='button' or self::button][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'next')]")
@@ -295,9 +232,11 @@ def fill_category_field(driver, category: str, wait_seconds: int = 12):
             print("[INFO] Next appears enabled" if not disabled else "[INFO] Next still appears disabled")
         except Exception:
             pass
-
-        print(f"[INFO] Category selected: {category}")
+        print(f"[INFO] Category selected: {target_category}")
         return True
+    except Exception as e:
+        print(f"[ERROR] Failed to select Category via dropdown: {str(e)[:140]}")
+        return False
     except Exception as e:
         print(f"[ERROR] Failed to select Category via dropdown: {str(e)[:140]}")
         return False
