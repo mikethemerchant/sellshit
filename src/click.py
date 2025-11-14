@@ -4,12 +4,203 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
 from webdriver_manager.chrome import ChromeDriverManager
 import os
 import time
+import json
 
 
 DEFAULT_DEBUGGER_ADDRESS = os.getenv("DEBUGGER_ADDRESS", "127.0.0.1:9222")
+ITEM_ID = 26  # Item ID to use for posting
+
+
+def load_item_data(item_id: int, json_path: str = "src/output.json"):
+    """Load item data from JSON file by ID. Returns item dict or None if not found."""
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            items = json.load(f)
+        
+        for item in items:
+            if item.get('ID') == item_id:
+                print(f"[INFO] Found item ID {item_id}: {item.get('Title', 'No title')}")
+                return item
+        
+        print(f"[ERROR] Item ID {item_id} not found in {json_path}")
+        return None
+    except FileNotFoundError:
+        print(f"[ERROR] File {json_path} not found")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] Failed to parse JSON: {e}")
+        return None
+    except Exception as e:
+        print(f"[ERROR] Error loading item data: {e}")
+        return None
+
+
+def fill_title_field(driver, title: str, wait_seconds: int = 20):
+    """Find and fill the title input field on the item creation form."""
+    wait = WebDriverWait(driver, wait_seconds)
+    
+    # Multiple selectors to try for the title field
+    title_selectors = [
+        # Try the specific ID first
+        (By.ID, "_r_9i_"),
+        # Try ID pattern matching (Facebook often uses _r_*_ pattern)
+        (By.XPATH, "//input[starts-with(@id, '_r_') and substring(@id, string-length(@id)) = '_']"),
+        (By.CSS_SELECTOR, "input[id^='_r_'][id$='_']"),
+        # Standard selectors
+        (By.XPATH, "//input[contains(@placeholder, 'Title') or contains(@aria-label, 'Title')]"),
+        (By.XPATH, "//input[@type='text' and (contains(@placeholder, 'title') or contains(@aria-label, 'title'))]"),
+        (By.XPATH, "//input[@name='title' or @id='title']"),
+        (By.CSS_SELECTOR, "input[placeholder*='Title' i], input[aria-label*='Title' i]"),
+        (By.XPATH, "//label[contains(text(), 'Title')]/following::input[1]"),
+        (By.XPATH, "//div[contains(text(), 'Title')]/following::input[1]"),
+        # Try to find first visible text input (as fallback)
+        (By.XPATH, "//input[@type='text' and not(@type='hidden')][1]"),
+    ]
+    
+    for by, sel in title_selectors:
+        try:
+            print(f"[DEBUG] Trying to find title field with selector: {by}={sel[:100]}...")
+            # Wait for element to be both present and visible
+            title_input = wait.until(EC.visibility_of_element_located((by, sel)))
+            print(f"[DEBUG] Found title field, scrolling into view...")
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", title_input)
+            time.sleep(0.5)
+            
+            # Wait for element to be clickable/interactable
+            WebDriverWait(driver, 5).until(EC.element_to_be_clickable((by, sel)))
+            
+            # Clear any existing text and fill with title
+            print(f"[DEBUG] Filling title field with: {title[:50]}...")
+            title_input.clear()
+            time.sleep(0.2)
+            title_input.send_keys(title)
+            print(f"[DEBUG] Title field filled successfully")
+            return True
+        except Exception as e:
+            print(f"[DEBUG] Selector failed: {type(e).__name__}: {str(e)[:200]}")
+            continue
+    
+    print("[ERROR] Could not find title input field")
+    # Debug: try to find any input fields on the page
+    try:
+        print("[DEBUG] Searching for any input fields on the page...")
+        all_inputs = driver.find_elements(By.TAG_NAME, "input")
+        print(f"[DEBUG] Found {len(all_inputs)} input elements")
+        for i, inp in enumerate(all_inputs[:10]):  # Check first 10
+            try:
+                placeholder = inp.get_attribute("placeholder") or ""
+                aria_label = inp.get_attribute("aria-label") or ""
+                name = inp.get_attribute("name") or ""
+                input_type = inp.get_attribute("type") or ""
+                input_id = inp.get_attribute("id") or ""
+                print(f"[DEBUG] Input {i}: type={input_type}, placeholder='{placeholder[:50]}', aria-label='{aria_label[:50]}', name='{name}', id='{input_id}'")
+            except:
+                pass
+    except Exception as e:
+        print(f"[DEBUG] Error while debugging inputs: {e}")
+    
+    return False
+
+
+def fill_price_field(driver, price, wait_seconds: int = 20):
+    """Find and fill the price input field on the item creation form."""
+    wait = WebDriverWait(driver, wait_seconds)
+    
+    # Convert price to string if it's a number
+    price_str = str(price) if price is not None else ""
+    
+    # Try to find the price field by ID first using JavaScript (more reliable for dynamic IDs)
+    try:
+        print("[DEBUG] Trying to find price field by ID '_r_fi_' using JavaScript...")
+        elem_exists = driver.execute_script("""
+            var elem = document.getElementById('_r_fi_');
+            return elem && elem.offsetParent !== null;
+        """)
+        if elem_exists:
+            print("[DEBUG] Price field with ID '_r_fi_' exists, finding it with Selenium...")
+            price_input = driver.find_element(By.ID, "_r_fi_")
+            print("[DEBUG] Found price field by ID, scrolling into view...")
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", price_input)
+            time.sleep(0.5)
+            price_input.clear()
+            time.sleep(0.2)
+            price_input.send_keys(price_str)
+            print("[DEBUG] Price field filled successfully")
+            return True
+    except Exception as e:
+        print(f"[DEBUG] JavaScript ID lookup failed: {e}")
+    
+    # Multiple selectors to try for the price field
+    price_selectors = [
+        # Try the specific ID first
+        (By.ID, "_r_fi_"),
+        # Try to find all inputs with _r_ pattern and get the one that's NOT the title field
+        (By.XPATH, "//input[starts-with(@id, '_r_') and substring(@id, string-length(@id)) = '_' and @id != '_r_9i_' and @id != '_r_fi_' and (@type='text' or @type='number' or not(@type))][1]"),
+        # Try the specific ID pattern
+        (By.XPATH, "//input[@id='_r_fi_']"),
+        # Standard selectors for price
+        (By.XPATH, "//input[contains(@placeholder, 'Price') or contains(@aria-label, 'Price')]"),
+        (By.XPATH, "//input[@type='number' and (contains(@placeholder, 'price') or contains(@aria-label, 'price'))]"),
+        (By.XPATH, "//input[@name='price' or @id='price']"),
+        (By.CSS_SELECTOR, "input[placeholder*='Price' i], input[aria-label*='Price' i]"),
+        (By.XPATH, "//label[contains(text(), 'Price')]/following::input[1]"),
+        (By.XPATH, "//div[contains(text(), 'Price')]/following::input[1]"),
+    ]
+    
+    for by, sel in price_selectors:
+        try:
+            print(f"[DEBUG] Trying to find price field with selector: {by}={sel[:100]}...")
+            # Wait for element to be both present and visible
+            price_input = wait.until(EC.visibility_of_element_located((by, sel)))
+            
+            # Double-check it's not the title field
+            input_id = price_input.get_attribute("id") or ""
+            if input_id == "_r_9i_":
+                print(f"[DEBUG] Found title field instead, skipping...")
+                continue
+                
+            print(f"[DEBUG] Found price field (id={input_id}), scrolling into view...")
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", price_input)
+            time.sleep(0.5)
+            
+            # Wait for element to be clickable/interactable
+            WebDriverWait(driver, 5).until(EC.element_to_be_clickable((by, sel)))
+            
+            # Clear any existing text and fill with price
+            print(f"[DEBUG] Filling price field with: {price_str}...")
+            price_input.clear()
+            time.sleep(0.2)
+            price_input.send_keys(price_str)
+            print(f"[DEBUG] Price field filled successfully")
+            return True
+        except Exception as e:
+            print(f"[DEBUG] Selector failed: {type(e).__name__}: {str(e)[:200]}")
+            continue
+    
+    print("[ERROR] Could not find price input field")
+    # Debug: try to find any input fields on the page
+    try:
+        print("[DEBUG] Searching for any input fields on the page...")
+        all_inputs = driver.find_elements(By.TAG_NAME, "input")
+        print(f"[DEBUG] Found {len(all_inputs)} input elements")
+        for i, inp in enumerate(all_inputs[:10]):  # Check first 10
+            try:
+                placeholder = inp.get_attribute("placeholder") or ""
+                aria_label = inp.get_attribute("aria-label") or ""
+                name = inp.get_attribute("name") or ""
+                input_type = inp.get_attribute("type") or ""
+                input_id = inp.get_attribute("id") or ""
+                print(f"[DEBUG] Input {i}: type={input_type}, placeholder='{placeholder[:50]}', aria-label='{aria_label[:50]}', name='{name}', id='{input_id}'")
+            except:
+                pass
+    except Exception as e:
+        print(f"[DEBUG] Error while debugging inputs: {e}")
+    
+    return False
 
 
 def create_driver(debugger_address: str = DEFAULT_DEBUGGER_ADDRESS):
@@ -172,6 +363,41 @@ def main():
 
         if not find_and_click(driver, item_for_sale_selectors, verify_after_click=verify_item_form, button_name="Item for sale"):
             print("[ERROR] Could not find or click the Item for sale button")
+            return
+        
+        # Load item data from JSON
+        print(f"[INFO] Loading item data for ID {ITEM_ID}...")
+        item_data = load_item_data(ITEM_ID)
+        if not item_data:
+            print(f"[ERROR] Failed to load item data for ID {ITEM_ID}")
+            return
+        
+        title = item_data.get('Title')
+        if not title:
+            print(f"[ERROR] No title found for item ID {ITEM_ID}")
+            return
+        
+        # Wait a bit for the form to fully load
+        time.sleep(2)
+        
+        # Fill the title field
+        print(f"[INFO] Filling title field with: {title}")
+        if not fill_title_field(driver, title):
+            print("[ERROR] Failed to fill title field")
+            return
+        
+        # Get price from item data
+        price = item_data.get('Price')
+        if price is None:
+            print(f"[WARNING] No price found for item ID {ITEM_ID}, skipping price field")
+        else:
+            # Wait a bit between filling fields
+            time.sleep(1)
+            
+            # Fill the price field
+            print(f"[INFO] Filling price field with: {price}")
+            if not fill_price_field(driver, price):
+                print("[WARNING] Failed to fill price field, continuing...")
         
         print("[INFO] Script completed.")
     finally:
