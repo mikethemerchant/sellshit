@@ -376,7 +376,12 @@ def select_condition(driver, condition_text: str = "Used - Good", wait_seconds: 
             "//label[@role='combobox' and .//span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'condition')]]"
         )))
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", label_combo)
-        label_combo.click()
+        time.sleep(0.3)
+        try:
+            label_combo.click()
+        except Exception:
+            # If click is intercepted, use JS click
+            driver.execute_script("arguments[0].click();", label_combo)
         time.sleep(0.2)
 
         # Wait for listbox/popover to appear
@@ -391,7 +396,11 @@ def select_condition(driver, condition_text: str = "Used - Good", wait_seconds: 
             f"//*[@role='listbox']//*[@role='option'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered_xpath_text}')]"
         )))
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opt)
-        opt.click()
+        try:
+            opt.click()
+        except Exception:
+            # If click is intercepted, use JS click
+            driver.execute_script("arguments[0].click();", opt)
         print(f"[INFO] Condition set to: {condition_text}")
         return True
     except Exception as e:
