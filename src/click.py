@@ -165,6 +165,47 @@ def fill_description_field(driver, description: str, wait_seconds: int = 20):
     return False
 
 
+def fill_category_field(driver, category: str, wait_seconds: int = 20):
+    wait = WebDriverWait(driver, wait_seconds)
+
+    selectors = [
+        # Try various category selectors
+        (By.XPATH, "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'category')]//following::input[1]"),
+        (By.XPATH, "//input[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'category')]"),
+        (By.XPATH, "//input[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'category')]"),
+        (By.CSS_SELECTOR, "input[placeholder*='Category' i]"),
+        (By.CSS_SELECTOR, "input[aria-label*='Category' i]"),
+    ]
+
+    for by, sel in selectors:
+        try:
+            print(f"[DEBUG] Trying category selector: {sel[:80]}")
+            category_input = wait.until(EC.visibility_of_element_located((by, sel)))
+
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", category_input)
+            # Click to focus
+            category_input.click()
+            time.sleep(0.3)
+            # Select all and delete
+            category_input.send_keys(Keys.CONTROL + 'a')
+            category_input.send_keys(Keys.DELETE)
+            time.sleep(0.2)
+            # Type the category
+            category_input.send_keys(category)
+            print(f"[INFO] Category filled: {category}")
+            # Wait a moment for any autocomplete dropdown to appear
+            time.sleep(0.5)
+            # Press Enter to select the first match or confirm
+            category_input.send_keys(Keys.ENTER)
+            return True
+        except Exception as e:
+            print(f"[DEBUG] Category selector failed: {str(e)[:100]}")
+            continue
+
+    print("[ERROR] Could not find Category input")
+    return False
+
+
 def create_driver(debugger_address: str = DEFAULT_DEBUGGER_ADDRESS):
     """Create and return a Chrome webdriver, optionally attaching to an existing browser."""
     options = Options()
@@ -382,6 +423,19 @@ def main():
                 print("[WARNING] Failed to fill description field, continuing...")
         else:
             print(f"[WARNING] No description found for item ID {ITEM_ID}, skipping description field")
+        
+        # Get category from item data
+        category = item_data.get('Category')
+        if category:
+            # Wait a bit between filling fields
+            time.sleep(1)
+            
+            # Fill the category field
+            print(f"[INFO] Filling category field with: {category}")
+            if not fill_category_field(driver, category):
+                print("[WARNING] Failed to fill category field, continuing...")
+        else:
+            print(f"[WARNING] No category found for item ID {ITEM_ID}, skipping category field")
         
         print("[INFO] Script completed.")
     finally:
