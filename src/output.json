@@ -1310,7 +1310,7 @@
       "C:\\sell\\images\\84_5.jpg",
       "C:\\sell\\images\\84_6.jpg"
     ],
-    "Status": "Posted",
+    "Status": "Draft",
     "Marketplace_URL": null,
     "Notes": null
   },
@@ -1331,7 +1331,7 @@
       "C:\\sell\\images\\85_6.jpg",
       "C:\\sell\\images\\85_7.jpg"
     ],
-    "Status": "Posted",
+    "Status": "Draft",
     "Marketplace_URL": null,
     "Notes": null
   },
@@ -1374,15 +1374,9 @@
       "C:\\sell\\images\\87_7.jpg",
       "C:\\sell\\images\\87_8.jpg",
       "C:\\sell\\images\\87_9.jpg",
-      "C:\\sell\\images\\87_10.jpg",
-      "C:\\sell\\images\\87_11.jpg",
-      "C:\\sell\\images\\87_12.jpg",
-      "C:\\sell\\images\\87_13.jpg",
-      "C:\\sell\\images\\87_14.jpg",
-      "C:\\sell\\images\\87_15.jpg",
-      "C:\\sell\\images\\87_16.jpg"
+      "C:\\sell\\images\\87_10.jpg"
     ],
-    "Status": "Draft",
+    "Status": "Posted",
     "Marketplace_URL": null,
     "Notes": null
   },
@@ -1406,7 +1400,7 @@
       "C:\\sell\\images\\88_9.jpg",
       "C:\\sell\\images\\88_10.jpg"
     ],
-    "Status": "Draft",
+    "Status": "Posted",
     "Marketplace_URL": null,
     "Notes": null
   },
@@ -1429,7 +1423,7 @@
       "C:\\sell\\images\\89_8.jpg",
       "C:\\sell\\images\\89_9.jpg"
     ],
-    "Status": "Draft",
+    "Status": "Posted",
     "Marketplace_URL": null,
     "Notes": null
   }
