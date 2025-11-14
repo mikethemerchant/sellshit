@@ -127,6 +127,44 @@ def fill_price_field(driver, price, wait_seconds: int = 20):
     return False
 
 
+def fill_description_field(driver, description: str, wait_seconds: int = 20):
+    wait = WebDriverWait(driver, wait_seconds)
+
+    selectors = [
+        # Try various description selectors
+        (By.XPATH, "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'description')]//following::textarea[1]"),
+        (By.XPATH, "//textarea[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'description')]"),
+        (By.XPATH, "//textarea[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'description')]"),
+        (By.CSS_SELECTOR, "textarea[placeholder*='Description' i]"),
+        (By.CSS_SELECTOR, "textarea[aria-label*='Description' i]"),
+        (By.CSS_SELECTOR, "textarea"),  # Any textarea as fallback
+    ]
+
+    for by, sel in selectors:
+        try:
+            print(f"[DEBUG] Trying description selector: {sel[:80]}")
+            description_input = wait.until(EC.visibility_of_element_located((by, sel)))
+
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", description_input)
+            # Click to focus
+            description_input.click()
+            time.sleep(0.3)
+            # Select all and delete
+            description_input.send_keys(Keys.CONTROL + 'a')
+            description_input.send_keys(Keys.DELETE)
+            time.sleep(0.2)
+            # Type the description
+            description_input.send_keys(description)
+            print(f"[INFO] Description filled: {description[:50]}...")
+            return True
+        except Exception as e:
+            print(f"[DEBUG] Description selector failed: {str(e)[:100]}")
+            continue
+
+    print("[ERROR] Could not find Description textarea")
+    return False
+
+
 def create_driver(debugger_address: str = DEFAULT_DEBUGGER_ADDRESS):
     """Create and return a Chrome webdriver, optionally attaching to an existing browser."""
     options = Options()
@@ -331,6 +369,19 @@ def main():
             print(f"[INFO] Filling price field with: {price}")
             if not fill_price_field(driver, price):
                 print("[WARNING] Failed to fill price field, continuing...")
+        
+        # Get description from item data
+        description = item_data.get('Description')
+        if description:
+            # Wait a bit between filling fields
+            time.sleep(1)
+            
+            # Fill the description field
+            print(f"[INFO] Filling description field with: {description[:50]}...")
+            if not fill_description_field(driver, description):
+                print("[WARNING] Failed to fill description field, continuing...")
+        else:
+            print(f"[WARNING] No description found for item ID {ITEM_ID}, skipping description field")
         
         print("[INFO] Script completed.")
     finally:
