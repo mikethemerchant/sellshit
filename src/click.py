@@ -9,10 +9,16 @@ from webdriver_manager.chrome import ChromeDriverManager
 import os
 import time
 import json
+import argparse
 
 
 DEFAULT_DEBUGGER_ADDRESS = os.getenv("DEBUGGER_ADDRESS", "127.0.0.1:9222")
-ITEM_ID = 26  # Item ID to use for posting
+DEFAULT_ITEM_ID = 29  # Fallback item ID if none provided
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Automate FB Marketplace listing form fill")
+    parser.add_argument("--id", type=int, help="Item ID from output.json to post", default=None)
+    return parser.parse_args()
 
 
 def load_item_data(item_id: int, json_path: str = "output.json"):
@@ -165,45 +171,136 @@ def fill_description_field(driver, description: str, wait_seconds: int = 20):
     return False
 
 
-def fill_category_field(driver, category: str, wait_seconds: int = 20):
+def fill_category_field(driver, category: str, wait_seconds: int = 12):
+    """Select Category via the dropdown (combobox + listbox) so 'Next' enables.
+
+    Supports hierarchical categories like "Sports & Outdoors ; Archery Equipment" by
+    selecting segments in order.
+    """
     wait = WebDriverWait(driver, wait_seconds)
 
-    selectors = [
-        # Try various category selectors
-        (By.XPATH, "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'category')]//following::input[1]"),
-        (By.XPATH, "//input[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'category')]"),
-        (By.XPATH, "//input[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'category')]"),
-        (By.CSS_SELECTOR, "input[placeholder*='Category' i]"),
-        (By.CSS_SELECTOR, "input[aria-label*='Category' i]"),
-    ]
+    # Split hierarchical categories on ';'
+    segments = [seg.strip() for seg in category.split(';') if seg.strip()]
+    if not segments:
+        segments = [category.strip()]
 
-    for by, sel in selectors:
-        try:
-            print(f"[DEBUG] Trying category selector: {sel[:80]}")
-            category_input = wait.until(EC.visibility_of_element_located((by, sel)))
+    try:
+        # Find a Category combobox-like opener and click to open
+        opener_selectors = [
+            "//label[@role='combobox' and .//span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'category')]]",
+            "//*[@role='combobox' and (contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'category') or .//span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'category')])]",
+            "//label[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'category')]/following::*[@role='combobox'][1]",
+        ]
 
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", category_input)
-            # Click to focus
-            category_input.click()
-            time.sleep(0.3)
-            # Select all and delete
-            category_input.send_keys(Keys.CONTROL + 'a')
-            category_input.send_keys(Keys.DELETE)
+        opener = None
+        last_err = None
+        for xpath in opener_selectors:
+            try:
+                print(f"[DEBUG] Looking for Category combobox with: {xpath[:100]}")
+                opener = wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+                break
+            except Exception as e:
+                last_err = e
+                continue
+        if opener is None:
+            raise last_err or Exception("Category combobox not found")
+
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opener)
+        opener.click()
+        time.sleep(0.2)
+
+        # For each segment, choose an option from the current listbox/popover
+        for idx, seg in enumerate(segments):
+            seg_lower = seg.lower().replace("'", "\'")
+
+            # Ensure a listbox is present; if not, click to open
+            try:
+                WebDriverWait(driver, 4).until(lambda d: d.find_elements(By.XPATH, "//*[@role='listbox']"))
+            except Exception:
+                try:
+                    opener.click()
+                    WebDriverWait(driver, 4).until(lambda d: d.find_elements(By.XPATH, "//*[@role='listbox']"))
+                except Exception:
+                    pass
+
+            print(f"[DEBUG] Selecting category segment {idx+1}/{len(segments)}: '{seg}'")
+
+            # First attempt: type into active combobox input to filter, then click the matching option
+            try:
+                active = driver.switch_to.active_element
+                try:
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", active)
+                except Exception:
+                    pass
+                active.send_keys(Keys.CONTROL + 'a')
+                active.send_keys(Keys.DELETE)
+                time.sleep(0.1)
+                active.send_keys(seg)
+                time.sleep(0.2)
+                # Try to click the filtered option explicitly
+                opt_after_type = WebDriverWait(driver, 4).until(EC.element_to_be_clickable((
+                    By.XPATH,
+                    f"//*[@role='listbox']//*[@role='option'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{seg_lower}')]"
+                )))
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opt_after_type)
+                try:
+                    opt_after_type.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click();", opt_after_type)
+                time.sleep(0.3)
+                # Proceed to next segment if this succeeds
+                continue
+            except Exception:
+                # Fall back to clicking an option below
+                pass
+            option_selectors = [
+                f"//*[@role='listbox']//*[@role='option'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{seg_lower}')]",
+                f"//*[contains(@id,'mount') or @role='dialog' or @role='menu' or @role='listbox']//*[@role='option' or @role='menuitem' or @role='button'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{seg_lower}')]",
+                f"//span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{seg_lower}')]/ancestor::*[@role='option' or @role='menuitem' or @role='button'][1]",
+            ]
+
+            opt = None
+            last_opt_err = None
+            for ox in option_selectors:
+                try:
+                    opt = WebDriverWait(driver, 6).until(EC.element_to_be_clickable((By.XPATH, ox)))
+                    break
+                except Exception as oe:
+                    last_opt_err = oe
+                    continue
+            if opt is None:
+                raise last_opt_err or Exception("Category option not found")
+
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opt)
+            try:
+                opt.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", opt)
             time.sleep(0.2)
-            # Type the category
-            category_input.send_keys(category)
-            print(f"[INFO] Category filled: {category}")
-            # Wait a moment for any autocomplete dropdown to appear
-            time.sleep(0.5)
-            # Press Enter to select the first match or confirm
-            category_input.send_keys(Keys.ENTER)
-            return True
-        except Exception as e:
-            print(f"[DEBUG] Category selector failed: {str(e)[:100]}")
-            continue
 
-    print("[ERROR] Could not find Category input")
-    return False
+        # Close dropdown and blur to trigger validation
+        try:
+            driver.switch_to.active_element.send_keys(Keys.ESCAPE)
+        except Exception:
+            pass
+        try:
+            driver.execute_script("if(document.activeElement){document.activeElement.blur();}")
+        except Exception:
+            pass
+
+        # Optional: verify Next becomes enabled (do not click it here)
+        try:
+            next_btn = driver.find_element(By.XPATH, "//div[@role='button' or self::button][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'next')]")
+            disabled = next_btn.get_attribute('aria-disabled') == 'true' or next_btn.get_attribute('disabled') is not None
+            print("[INFO] Next appears enabled" if not disabled else "[INFO] Next still appears disabled")
+        except Exception:
+            pass
+
+        print(f"[INFO] Category selected: {category}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to select Category via dropdown: {str(e)[:140]}")
+        return False
 
 
 def upload_photos(driver, photo_paths: list, wait_seconds: int = 20):
@@ -368,6 +465,7 @@ def find_and_click(driver, selectors, wait_seconds: int = 20, verify_after_click
 
 
 def main():
+    args = parse_args()
     using_debugger = bool(DEFAULT_DEBUGGER_ADDRESS)
     driver = create_driver()
     try:
@@ -465,15 +563,16 @@ def main():
             return
         
         # Load item data from JSON
-        print(f"[INFO] Loading item data for ID {ITEM_ID}...")
-        item_data = load_item_data(ITEM_ID)
+        chosen_id = args.id or int(os.getenv("ITEM_ID", DEFAULT_ITEM_ID))
+        print(f"[INFO] Loading item data for ID {chosen_id}...")
+        item_data = load_item_data(chosen_id)
         if not item_data:
-            print(f"[ERROR] Failed to load item data for ID {ITEM_ID}")
+            print(f"[ERROR] Failed to load item data for ID {chosen_id}")
             return
         
         title = item_data.get('Title')
         if not title:
-            print(f"[ERROR] No title found for item ID {ITEM_ID}")
+            print(f"[ERROR] No title found for item ID {chosen_id}")
             return
         
         # Wait for the form to fully load - look for title input
@@ -497,7 +596,7 @@ def main():
         # Get price from item data
         price = item_data.get('Price')
         if price is None:
-            print(f"[WARNING] No price found for item ID {ITEM_ID}, skipping price field")
+            print(f"[WARNING] No price found for item ID {chosen_id}, skipping price field")
         else:
             # Wait a bit between filling fields
             time.sleep(1)
@@ -518,7 +617,7 @@ def main():
             if not fill_description_field(driver, description):
                 print("[WARNING] Failed to fill description field, continuing...")
         else:
-            print(f"[WARNING] No description found for item ID {ITEM_ID}, skipping description field")
+            print(f"[WARNING] No description found for item ID {chosen_id}, skipping description field")
         
         # Get category from item data
         category = item_data.get('Category')
@@ -531,7 +630,7 @@ def main():
             if not fill_category_field(driver, category):
                 print("[WARNING] Failed to fill category field, continuing...")
         else:
-            print(f"[WARNING] No category found for item ID {ITEM_ID}, skipping category field")
+            print(f"[WARNING] No category found for item ID {chosen_id}, skipping category field")
         
         # Set condition (default to "Used - Good" for now)
         condition_value = "Used - Good"
@@ -550,7 +649,7 @@ def main():
             if not upload_photos(driver, photo_paths):
                 print("[WARNING] Failed to upload photos, continuing...")
         else:
-            print(f"[WARNING] No photos found for item ID {ITEM_ID}, skipping photo upload")
+            print(f"[WARNING] No photos found for item ID {chosen_id}, skipping photo upload")
         
         print("[INFO] Script completed.")
     finally:
