@@ -206,6 +206,64 @@ def fill_category_field(driver, category: str, wait_seconds: int = 20):
     return False
 
 
+def upload_photos(driver, photo_paths: list, wait_seconds: int = 20):
+    """Upload photos by sending file paths directly to the file input element.
+    
+    Args:
+        driver: The WebDriver instance
+        photo_paths: List of absolute file paths to upload
+        wait_seconds: Maximum time to wait for file input element
+    
+    Returns:
+        True if photos were uploaded successfully, False otherwise
+    """
+    wait = WebDriverWait(driver, wait_seconds)
+    
+    # Verify all photo files exist first
+    valid_paths = []
+    for path in photo_paths:
+        if os.path.exists(path):
+            valid_paths.append(path)
+            print(f"[DEBUG] Found photo: {os.path.basename(path)}")
+        else:
+            print(f"[WARNING] Photo not found: {path}")
+    
+    if not valid_paths:
+        print("[ERROR] No valid photo files found")
+        return False
+    
+    # Try to find the file input element
+    selectors = [
+        (By.CSS_SELECTOR, "input[type='file']"),
+        (By.XPATH, "//input[@type='file']"),
+    ]
+    
+    for by, sel in selectors:
+        try:
+            print(f"[DEBUG] Trying file input selector: {sel}")
+            # File inputs are often hidden, so use presence_of_element_located instead of visibility
+            file_input = wait.until(EC.presence_of_element_located((by, sel)))
+            
+            # For multiple files, join paths with newline (works for most browsers)
+            all_paths = "\n".join(valid_paths)
+            
+            print(f"[INFO] Sending {len(valid_paths)} file path(s) to file input...")
+            file_input.send_keys(all_paths)
+            
+            # Wait a moment for files to be processed
+            time.sleep(1)
+            
+            print(f"[INFO] Successfully uploaded {len(valid_paths)} photo(s)")
+            return True
+            
+        except Exception as e:
+            print(f"[DEBUG] File input selector failed: {str(e)[:100]}")
+            continue
+    
+    print("[ERROR] Could not find file input element")
+    return False
+
+
 def create_driver(debugger_address: str = DEFAULT_DEBUGGER_ADDRESS):
     """Create and return a Chrome webdriver, optionally attaching to an existing browser."""
     options = Options()
@@ -436,6 +494,19 @@ def main():
                 print("[WARNING] Failed to fill category field, continuing...")
         else:
             print(f"[WARNING] No category found for item ID {ITEM_ID}, skipping category field")
+        
+        # Get photo paths from item data
+        photo_paths = item_data.get('Photo_Paths', [])
+        if photo_paths and len(photo_paths) > 0:
+            # Wait a bit between operations
+            time.sleep(1)
+            
+            # Upload photos
+            print(f"[INFO] Uploading {len(photo_paths)} photo(s)...")
+            if not upload_photos(driver, photo_paths):
+                print("[WARNING] Failed to upload photos, continuing...")
+        else:
+            print(f"[WARNING] No photos found for item ID {ITEM_ID}, skipping photo upload")
         
         print("[INFO] Script completed.")
     finally:
