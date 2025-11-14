@@ -264,158 +264,42 @@ def upload_photos(driver, photo_paths: list, wait_seconds: int = 20):
     return False
 
 
-def select_condition(driver, condition_text: str = "Used - Good", wait_seconds: int = 20):
-    """Select a condition value from the Condition dropdown/selector.
+def select_condition(driver, condition_text: str = "Used - Good", wait_seconds: int = 10):
+    """Select Condition using the combobox+listbox pattern observed in the UI.
 
-    Tries multiple strategies: typing into a combobox, clicking a button to open a
-    menu, then clicking the desired option.
+    Keeps only the proven strategy for speed and reliability.
     """
     wait = WebDriverWait(driver, wait_seconds)
-
     lowered = condition_text.lower()
 
-    # Strategy A: find an input/combobox with Condition label and type + Enter
-    combo_selectors = [
-        (By.XPATH, "//*[@role='combobox' and (contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'condition') or contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'condition'))]"),
-        (By.XPATH, "//input[(contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'condition') or contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'condition'))]"),
-    ]
-
-    for by, sel in combo_selectors:
-        try:
-            print(f"[DEBUG] Trying condition combobox/input: {sel[:100]}")
-            box = wait.until(EC.element_to_be_clickable((by, sel)))
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", box)
-            box.click()
-            time.sleep(0.2)
-            box.send_keys(Keys.CONTROL + 'a')
-            box.send_keys(Keys.DELETE)
-            time.sleep(0.1)
-            box.send_keys(condition_text)
-            time.sleep(0.3)
-            box.send_keys(Keys.ENTER)
-            # Verify text appears near condition control
-            try:
-                WebDriverWait(driver, 5).until(lambda d: d.find_elements(By.XPATH, f"//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered}')]"))
-                print(f"[INFO] Condition set to: {condition_text}")
-                return True
-            except Exception:
-                pass
-        except Exception as e:
-            print(f"[DEBUG] Condition combobox attempt failed: {str(e)[:100]}")
-
-    # Strategy B: click a button/field labeled Condition to open a menu, then pick option
-    opener_selectors = [
-        (By.XPATH, "//*[@role='button' and contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'condition') ]"),
-        (By.XPATH, "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'condition')]/following::*[@role='button'][1]"),
-        (By.XPATH, "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'condition')][ancestor::*[@role='button']][1]/ancestor::*[@role='button'][1]"),
-    ]
-
-    for by, sel in opener_selectors:
-        try:
-            print(f"[DEBUG] Trying condition opener: {sel[:100]}")
-            opener = wait.until(EC.element_to_be_clickable((by, sel)))
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opener)
-            opener.click()
-            time.sleep(0.3)
-
-            # Now try to click the desired option
-            option_selectors = [
-                (By.XPATH, f"//*[@role='option' or @role='menuitem' or @role='button'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered}')]"),
-                (By.XPATH, f"//span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered}')]"),
-                (By.XPATH, f"//div[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered}')]"),
-            ]
-            for oby, osel in option_selectors:
-                try:
-                    print(f"[DEBUG] Trying condition option: {osel[:100]}")
-                    opt = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((oby, osel)))
-                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opt)
-                    opt.click()
-                    print(f"[INFO] Condition set to: {condition_text}")
-                    return True
-                except Exception as e:
-                    print(f"[DEBUG] Condition option failed: {str(e)[:100]}")
-                    continue
-        except Exception as e:
-            print(f"[DEBUG] Condition opener failed: {str(e)[:100]}")
-
-    # Strategy C: direct radio-style options search by text and click
-    radio_option_selectors = [
-        (By.XPATH, f"//*[@role='radio' and contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered}')]"),
-        (By.XPATH, f"//*[@role='button' and contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered}')]"),
-        (By.XPATH, f"//label[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered}')]"),
-        (By.XPATH, f"//span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered}')]/ancestor::*[@role='radio' or @role='button'][1]"),
-    ]
-
-    for by, sel in radio_option_selectors:
-        try:
-            print(f"[DEBUG] Trying direct condition option: {sel[:100]}")
-            opt = wait.until(EC.element_to_be_clickable((by, sel)))
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opt)
-            opt.click()
-            # Verify selection via ARIA state
-            try:
-                WebDriverWait(driver, 5).until(lambda d: (
-                    opt.get_attribute('aria-checked') == 'true'
-                    or opt.get_attribute('aria-selected') == 'true'
-                    or condition_text.lower() in (opt.text or '').lower()
-                ))
-            except Exception:
-                pass
-            print(f"[INFO] Condition set to: {condition_text}")
-            return True
-        except Exception as e:
-            print(f"[DEBUG] Direct option click failed: {str(e)[:100]}")
-            continue
-
-    # Strategy D (from provided HTML): label element acting as combobox containing a span with text 'Condition'
     try:
-        print("[DEBUG] Trying label[role='combobox'] for Condition")
+        # Find the Condition combobox label and click to open
         label_combo = wait.until(EC.element_to_be_clickable((
             By.XPATH,
             "//label[@role='combobox' and .//span[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'condition')]]"
         )))
-        # Debug: print snippet
-        try:
-            snippet = driver.execute_script("return arguments[0].outerHTML.slice(0,300);", label_combo)
-            print(f"[DEBUG] Combobox snippet: {snippet}")
-        except Exception:
-            pass
-
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", label_combo)
         label_combo.click()
-        time.sleep(0.3)
-        # Wait for aria-expanded to become true OR a listbox to appear
-        try:
-            WebDriverWait(driver, 5).until(lambda d: (
-                label_combo.get_attribute('aria-expanded') == 'true' or d.find_elements(By.XPATH, "//*[@role='listbox']")
-            ))
-        except Exception:
-            pass
+        time.sleep(0.2)
 
-        # Find option inside listbox/popover
+        # Wait for listbox/popover to appear
+        WebDriverWait(driver, 4).until(lambda d: (
+            label_combo.get_attribute('aria-expanded') == 'true' or d.find_elements(By.XPATH, "//*[@role='listbox']")
+        ))
+
+        # Click the desired option in the listbox/popover
         lowered_xpath_text = lowered.replace("'", "\'")
-        option_in_listbox_selectors = [
-            (By.XPATH, f"//*[@role='listbox']//*[@role='option'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered_xpath_text}')]"),
-            (By.XPATH, f"//*[@role='listbox']//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered_xpath_text}')]"),
-            (By.XPATH, f"//*[contains(@id,'mount') or contains(@role,'dialog') or @role='menu' or @role='listbox']//*[@role='option' or @role='menuitem' or @role='button'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered_xpath_text}')]"),
-        ]
-        for oby, osel in option_in_listbox_selectors:
-            try:
-                print(f"[DEBUG] Trying listbox option: {osel[:120]}")
-                opt = WebDriverWait(driver, 6).until(EC.element_to_be_clickable((oby, osel)))
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opt)
-                opt.click()
-                time.sleep(0.2)
-                print(f"[INFO] Condition set to: {condition_text}")
-                return True
-            except Exception as e:
-                print(f"[DEBUG] Listbox option failed: {str(e)[:100]}")
-                continue
+        opt = WebDriverWait(driver, 6).until(EC.element_to_be_clickable((
+            By.XPATH,
+            f"//*[@role='listbox']//*[@role='option'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{lowered_xpath_text}')]"
+        )))
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", opt)
+        opt.click()
+        print(f"[INFO] Condition set to: {condition_text}")
+        return True
     except Exception as e:
-        print(f"[DEBUG] Label combobox strategy failed: {str(e)[:120]}")
-
-    print("[ERROR] Could not set Condition")
-    return False
+        print(f"[ERROR] Failed to set Condition quickly: {str(e)[:140]}")
+        return False
 
 
 def create_driver(debugger_address: str = DEFAULT_DEBUGGER_ADDRESS):
