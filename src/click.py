@@ -91,7 +91,7 @@ def find_and_click(driver, selectors, wait_seconds: int = 20):
                         created = False
 
                     if created:
-                        print(f"✅ Click produced expected create UI (method={name})")
+                        print(f"[SUCCESS] Click produced expected create UI (method={name})")
                         return True
                     else:
                         print(f"Click method {name} did not produce create UI; trying next method")
@@ -123,7 +123,7 @@ def main():
 
         clicked = find_and_click(driver, selectors)
         if not clicked:
-            print("❌ Could not find or click the Create new listing button")
+            print("[ERROR] Could not find or click the Create new listing button")
 
     # no static sleep here - find_and_click verifies the create UI appears
     finally:
