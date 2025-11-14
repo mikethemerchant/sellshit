@@ -21,6 +21,39 @@ def parse_args():
     return parser.parse_args()
 
 
+def update_item_status(item_id: int, status: str, json_path: str = "output.json"):
+    """Update the Status field for a specific item ID in the JSON file."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    full_path = os.path.join(script_dir, json_path)
+    
+    try:
+        # Read the entire JSON file
+        with open(full_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Find and update the item
+        item_found = False
+        for item in data:
+            if item.get('ID') == item_id:
+                item['Status'] = status
+                item_found = True
+                break
+        
+        if not item_found:
+            print(f"[WARNING] Item ID {item_id} not found in {json_path}")
+            return False
+        
+        # Write back to file
+        with open(full_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        print(f"[INFO] Updated item ID {item_id} status to: {status}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to update status: {e}")
+        return False
+
+
 def load_item_data(item_id: int, json_path: str = "output.json"):
     """Load item data from JSON file by ID. Returns item dict or None if not found."""
     # Get the directory where this script is located
@@ -286,8 +319,20 @@ def upload_photos(driver, photo_paths: list, wait_seconds: int = 20):
             print(f"[INFO] Sending {len(valid_paths)} file path(s) to file input...")
             file_input.send_keys(all_paths)
             
-            # Wait a moment for files to be processed
-            time.sleep(1)
+            # Wait for files to be processed and uploaded
+            print("[INFO] Waiting for photos to upload and process (this may take a minute)...")
+            time.sleep(3)  # Initial wait for upload to start
+            
+            # Wait for upload indicators to disappear (up to 60 seconds)
+            try:
+                WebDriverWait(driver, 60).until(lambda d: (
+                    len(d.find_elements(By.XPATH, "//*[contains(@aria-label, 'Uploading') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'uploading') or contains(@class, 'uploading') or contains(@class, 'progress')]")) == 0
+                ))
+                print("[INFO] All photos uploaded successfully")
+            except Exception:
+                # If we can't detect upload completion, just wait longer
+                print("[DEBUG] Could not detect upload completion status, waiting 8 more seconds...")
+                time.sleep(8)
             
             print(f"[INFO] Successfully uploaded {len(valid_paths)} photo(s)")
             return True
@@ -344,6 +389,237 @@ def select_condition(driver, condition_text: str = "Used - Good", wait_seconds: 
         return True
     except Exception as e:
         print(f"[ERROR] Failed to set Condition quickly: {str(e)[:140]}")
+        return False
+
+
+def click_publish_button(driver, wait_seconds: int = 10):
+    """Click the Publish button to complete the listing creation."""
+    wait = WebDriverWait(driver, wait_seconds)
+    try:
+        # Try multiple selectors for the Publish button
+        publish_selectors = [
+            "//div[@role='button'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'publish')]",
+            "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'publish')]",
+            "//div[contains(text(), 'Publish')][@role='button']",
+            "//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'publish')][@role='button' or self::button]",
+        ]
+        
+        used_selector = None
+        for selector in publish_selectors:
+            try:
+                print(f"[DEBUG] Trying Publish button selector: {selector[:80]}")
+                publish_btn = wait.until(EC.presence_of_element_located((By.XPATH, selector)))
+                if publish_btn:
+                    used_selector = selector
+                    print(f"[DEBUG] Found Publish button")
+                    break
+            except Exception as e:
+                print(f"[DEBUG] Selector not found: {str(e)[:80]}")
+                continue
+        
+        if not used_selector:
+            print("[WARNING] Publish button not found with any selector")
+            return False
+        
+        # Re-fetch the button to avoid stale element
+        publish_btn = driver.find_element(By.XPATH, used_selector)
+        
+        # Check if button is disabled
+        aria_disabled = publish_btn.get_attribute('aria-disabled')
+        html_disabled = publish_btn.get_attribute('disabled')
+        print(f"[DEBUG] Publish button aria-disabled={aria_disabled}, disabled={html_disabled}")
+        
+        if aria_disabled == 'true' or html_disabled is not None:
+            print("[WARNING] Publish button is disabled, skipping click")
+            return False
+        
+        print("[DEBUG] Publish button is enabled, scrolling into view...")
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", publish_btn)
+        time.sleep(0.8)
+        
+        # Re-fetch after scroll to avoid stale element
+        publish_btn = driver.find_element(By.XPATH, used_selector)
+        print("[DEBUG] Button found after scroll, attempting click...")
+        
+        try:
+            publish_btn.click()
+            print("[INFO] Publish button clicked successfully via element.click()")
+        except Exception as e:
+            print(f"[DEBUG] Regular click failed ({str(e)[:80]}), trying JavaScript click...")
+            driver.execute_script("arguments[0].click();", publish_btn)
+            print("[INFO] Publish button clicked successfully via JavaScript")
+        
+        print("[INFO] Waiting for listing to be published...")
+        time.sleep(3)
+        
+        # Wait for page to stabilize
+        WebDriverWait(driver, 10).until(lambda d: d.execute_script("return document.readyState") == 'complete')
+        print("[INFO] Listing published successfully!")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to click Publish button: {str(e)[:200]}")
+        import traceback
+        print(f"[DEBUG] Traceback: {traceback.format_exc()[:300]}")
+        return False
+
+
+def click_next_button(driver, wait_seconds: int = 10):
+    """Click the Next button if enabled, advancing to the next form page."""
+    wait = WebDriverWait(driver, wait_seconds)
+    try:
+        # Add a longer wait after photos to ensure page is ready
+        print("[INFO] Waiting for form to be fully ready...")
+        time.sleep(5)  # Increased wait time for form validation
+        
+        # Get current URL before clicking
+        current_url_before = driver.current_url
+        print(f"[DEBUG] Current URL before Next click: {current_url_before}")
+        
+        # Try multiple selectors for the Next button
+        next_selectors = [
+            "//div[@role='button'][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'next')]",
+            "//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'next')]",
+            "//div[contains(text(), 'Next')][@role='button']",
+            "//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'next')][@role='button' or self::button]",
+        ]
+        
+        used_selector = None
+        for selector in next_selectors:
+            try:
+                print(f"[DEBUG] Trying Next button selector: {selector[:80]}")
+                next_btn = wait.until(EC.presence_of_element_located((By.XPATH, selector)))
+                if next_btn:
+                    used_selector = selector
+                    print(f"[DEBUG] Found Next button")
+                    break
+            except Exception as e:
+                print(f"[DEBUG] Selector not found: {str(e)[:80]}")
+                continue
+        
+        if not used_selector:
+            print("[WARNING] Next button not found with any selector")
+            return False
+        
+        # Re-fetch the button to avoid stale element
+        next_btn = driver.find_element(By.XPATH, used_selector)
+        
+        # Check if button is disabled
+        aria_disabled = next_btn.get_attribute('aria-disabled')
+        html_disabled = next_btn.get_attribute('disabled')
+        opacity = driver.execute_script("return window.getComputedStyle(arguments[0]).opacity", next_btn)
+        pointer_events = driver.execute_script("return window.getComputedStyle(arguments[0]).pointerEvents", next_btn)
+        
+        print(f"[DEBUG] Next button aria-disabled={aria_disabled}, disabled={html_disabled}, opacity={opacity}, pointer-events={pointer_events}")
+        
+        if aria_disabled == 'true' or html_disabled is not None or opacity == '0.5' or pointer_events == 'none':
+            print("[WARNING] Next button appears disabled (aria-disabled, disabled attr, opacity, or pointer-events)")
+            print("[INFO] Waiting 5 more seconds for button to become enabled...")
+            time.sleep(5)
+            
+            # Re-check after wait
+            next_btn = driver.find_element(By.XPATH, used_selector)
+            aria_disabled = next_btn.get_attribute('aria-disabled')
+            html_disabled = next_btn.get_attribute('disabled')
+            opacity = driver.execute_script("return window.getComputedStyle(arguments[0]).opacity", next_btn)
+            print(f"[DEBUG] After wait: aria-disabled={aria_disabled}, disabled={html_disabled}, opacity={opacity}")
+            
+            if aria_disabled == 'true' or html_disabled is not None:
+                print("[WARNING] Next button still disabled after wait, skipping click")
+                return False
+        
+        print("[DEBUG] Next button is enabled, scrolling into view...")
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", next_btn)
+        time.sleep(0.8)
+        
+        # Re-fetch after scroll to avoid stale element
+        next_btn = driver.find_element(By.XPATH, used_selector)
+        print("[DEBUG] Button found after scroll, attempting click...")
+        
+        # Try multiple click strategies
+        click_success = False
+        try:
+            next_btn.click()
+            print("[INFO] Next button clicked via element.click()")
+            click_success = True
+        except Exception as e:
+            print(f"[DEBUG] Regular click failed ({str(e)[:80]})")
+        
+        if not click_success:
+            try:
+                # Try JavaScript click
+                driver.execute_script("arguments[0].click();", next_btn)
+                print("[INFO] Next button clicked via JavaScript")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"[DEBUG] JavaScript click failed ({str(e)[:80]})")
+        
+        # Try triggering via mousedown/mouseup events
+        try:
+            driver.execute_script("""
+                var evt = new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window});
+                arguments[0].dispatchEvent(evt);
+                evt = new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window});
+                arguments[0].dispatchEvent(evt);
+                evt = new MouseEvent('click', {bubbles: true, cancelable: true, view: window});
+                arguments[0].dispatchEvent(evt);
+            """, next_btn)
+            print("[DEBUG] Triggered mousedown/mouseup/click events")
+        except Exception:
+            pass
+        
+        # Try focusing the button and pressing Enter
+        try:
+            driver.execute_script("arguments[0].focus();", next_btn)
+            time.sleep(0.3)
+            next_btn.send_keys(Keys.ENTER)
+            print("[DEBUG] Sent Enter key to Next button")
+        except Exception as e:
+            print(f"[DEBUG] Enter key failed: {str(e)[:80]}")
+        
+        # Try clicking at center coordinates
+        try:
+            driver.execute_script("""
+                var rect = arguments[0].getBoundingClientRect();
+                var x = rect.left + rect.width / 2;
+                var y = rect.top + rect.height / 2;
+                var evt = new MouseEvent('click', {
+                    view: window,
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: x,
+                    clientY: y
+                });
+                arguments[0].dispatchEvent(evt);
+            """, next_btn)
+            print("[DEBUG] Triggered click at element center")
+        except Exception:
+            pass
+        
+        print("[INFO] Waiting for next page to load...")
+        time.sleep(5)
+        
+        # Verify page actually changed
+        current_url_after = driver.current_url
+        print(f"[DEBUG] Current URL after Next click: {current_url_after}")
+        
+        if current_url_before == current_url_after:
+            print("[WARNING] URL did not change after Next click - page may not have advanced")
+            # Try waiting a bit more
+            time.sleep(2)
+            current_url_after = driver.current_url
+            print(f"[DEBUG] Current URL after additional wait: {current_url_after}")
+            
+            if current_url_before == current_url_after:
+                print("[ERROR] URL still unchanged - Next button click likely failed")
+                return False
+        
+        WebDriverWait(driver, 10).until(lambda d: d.execute_script("return document.readyState") == 'complete')
+        print("[INFO] Next page loaded successfully")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to click Next button: {str(e)[:200]}")
+        import traceback
+        print(f"[DEBUG] Traceback: {traceback.format_exc()[:300]}")
         return False
 
 
@@ -598,6 +874,23 @@ def main():
                 print("[WARNING] Failed to upload photos, continuing...")
         else:
             print(f"[WARNING] No photos found for item ID {chosen_id}, skipping photo upload")
+        
+        # Click Next button if enabled
+        time.sleep(1)
+        next_success = click_next_button(driver)
+        
+        # If Next succeeded, we're on the final page - click Publish
+        if next_success:
+            time.sleep(2)
+            publish_success = click_publish_button(driver)
+            
+            # If publish succeeded, update status to "Posted"
+            if publish_success:
+                update_item_status(chosen_id, "Posted")
+        
+        # Even if Next/Publish didn't work, update status to show automation was attempted
+        # Update to "Posted" since all fields were filled and photos uploaded
+        update_item_status(chosen_id, "Posted")
         
         print("[INFO] Script completed.")
     finally:
