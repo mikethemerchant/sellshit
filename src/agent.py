@@ -533,9 +533,10 @@ class MessengerAgent:
             print("⚠️ Failed to type message:", e)
 
     def get_thread_info(self):
-        """Extract thread id from URL and buyer name from header if available."""
+        """Extract thread id from URL, buyer name, and item title from header/banner."""
         tid = None
         name = None
+        item_title = None
         try:
             url = self.driver.current_url
             p = urlparse(url)
@@ -547,25 +548,76 @@ class MessengerAgent:
                     tid = parts[idx + 1]
         except Exception:
             pass
-        # Buyer name in header region
+        
+        # Buyer name and item title in header/banner region
         try:
+            # Look for buyer name and item in header - often formatted as "Name · Item Title"
             header_selectors = [
                 "div[aria-label='Conversation Information'] h1 span[dir='auto']",
                 "header h2 span[dir='auto']",
                 "div[role='banner'] span[dir='auto']",
+                "h2[class] span[dir='auto']",
             ]
+            header_text = None
             for sel in header_selectors:
                 els = self.driver.find_elements(By.CSS_SELECTOR, sel)
                 for el in els:
                     t = (el.text or '').strip()
                     if t and len(t) > 1:
-                        name = t
+                        header_text = t
                         break
-                if name:
+                if header_text:
                     break
+            
+            # Parse "Name · Item Title" format
+            if header_text and ' · ' in header_text:
+                parts = header_text.split(' · ', 1)
+                name = parts[0].strip()
+                item_title = parts[1].strip() if len(parts) > 1 else None
+            elif header_text:
+                name = header_text
         except Exception:
             pass
-        return tid, name
+        
+        # If item title not found yet, look for Marketplace listing banner/link
+        if not item_title:
+            try:
+                # Common patterns for item title in conversation header
+                item_selectors = [
+                    "a[href*='/marketplace/item/'] span[dir='auto']",  # Marketplace item link
+                    "div[aria-label*='Marketplace'] span[dir='auto']",
+                    "a[role='link'][href*='/marketplace/'] span",
+                ]
+                for sel in item_selectors:
+                    els = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                    for el in els:
+                        txt = (el.text or '').strip()
+                        # Item titles are typically longer than just a name
+                        if txt and len(txt) > 5 and txt != name and txt.lower() != 'marketplace':
+                            item_title = txt
+                            break
+                    if item_title:
+                        break
+                
+                # Fallback: scan all visible text in header/banner region for longest non-name string
+                if not item_title:
+                    try:
+                        banner = self.driver.find_element(By.XPATH, "//div[@role='banner'] | //header")
+                        all_spans = banner.find_elements(By.CSS_SELECTOR, "span[dir='auto']")
+                        candidates = []
+                        for sp in all_spans:
+                            txt = (sp.text or '').strip()
+                            if txt and len(txt) > 10 and txt != name and txt.lower() != 'marketplace':
+                                candidates.append(txt)
+                        # Pick the longest as likely item title
+                        if candidates:
+                            item_title = max(candidates, key=len)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        
+        return tid, name, item_title
 
     def update_item_status(self, item, status: str):
         try:
@@ -650,11 +702,13 @@ class MessengerAgent:
         if not last_message:
             return
 
-        # Thread info + state
-        thread_id, buyer_name = self.get_thread_info()
+        # Thread info + state (now includes item_title from header)
+        thread_id, buyer_name, item_title_from_header = self.get_thread_info()
         if buyer_name and self.state:
             self.state.set_buyer_name(thread_id or "unknown", buyer_name)
         print(f"🧵 Thread: id={thread_id} buyer={buyer_name}")
+        if item_title_from_header:
+            print(f"🏷️  Item from header: {item_title_from_header}")
 
         # Dedupe: only respond to new messages
         if self.state and thread_id:
@@ -662,14 +716,28 @@ class MessengerAgent:
                 print("⛔ No new buyer message — skipping reply.")
                 return
 
-        # Match item by title tokens
-        matched_item = self.inventory.get_item_by_title(last_message)
+        # Match item: prioritize header title, fallback to message text
+        matched_item = None
+        if item_title_from_header:
+            matched_item = self.inventory.get_item_by_title(item_title_from_header)
+            if matched_item:
+                print(f"✅ Matched item from header: {(matched_item.get('Title') or matched_item.get('title'))}")
+        
+        if not matched_item:
+            # Fallback: try matching from message text
+            matched_item = self.inventory.get_item_by_title(last_message)
+            if matched_item:
+                print(f"✅ Matched item from message: {(matched_item.get('Title') or matched_item.get('title'))}")
+        
         if matched_item:
-            print(f"✅ Matched item: {(matched_item.get('Title') or matched_item.get('title') or 'Unknown')}")
-            # Update status to IN_CONVO
+            # Update status to IN_CONVO and persist item association
             self.update_item_status(matched_item, "IN_CONVO")
+            if self.state and thread_id:
+                item_id = matched_item.get('id') or matched_item.get('ID')
+                if item_id:
+                    self.state.set_item_id(thread_id, item_id)
         else:
-            print("⚠️ Could not match item from message text")
+            print("⚠️ Could not match item from header or message text")
 
         # Generate response (rule-based for now)
         response = self.infer_intent_and_reply(last_message, matched_item)
