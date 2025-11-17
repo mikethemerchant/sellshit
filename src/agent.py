@@ -3,6 +3,8 @@ import time
 import os
 import argparse
 from datetime import datetime
+from urllib.parse import urlparse
+from selenium.webdriver.common.keys import Keys
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -12,6 +14,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
 OUTPUT_JSON = "output.json"
+
+try:
+    from buyer_state import BuyerStateStore
+except Exception:
+    BuyerStateStore = None
 
 ###########################################################################
 # SETUP: Connect to already-open Chrome in remote debugging mode
@@ -81,6 +88,7 @@ class MessengerAgent:
     def __init__(self, driver, inventory):
         self.driver = driver
         self.inventory = inventory
+        self.state = BuyerStateStore() if BuyerStateStore else None
 
     def open_messenger(self):
         print("🔗 Opening Facebook Marketplace Inbox...")
@@ -148,11 +156,26 @@ class MessengerAgent:
         # Try XPath to find any links or divs that might be conversations
         if mode == "messages":
             xpath_selectors = [
-                "//div[@aria-label='Chats']//div[@role='grid']//div[@role='row']",
-                "//div[@aria-label='Chats']//div[@role='listitem' or @role='row']",
-                "//div[@aria-label='Chats']//a[@role='link']",
-                "//a[contains(@href, '/messages/t/')]",
+                "//a[@role='link' and contains(@href, '/messages/t/')]",  # Direct thread links first
+                "//div[@aria-label='Chats']//div[@role='row']",  # Chats pane rows
+                "//div[@role='grid']//div[@role='row']",  # Grid rows (broad)
+                "//div[@role='listitem']",  # List items
             ]
+            # Try to force-load more rows by scrolling any visible grid/list container
+            try:
+                for container_sel in ["//div[@aria-label='Chats']", "//div[@role='grid']", "//div[@role='list']"]:
+                    try:
+                        container = self.driver.find_element(By.XPATH, container_sel)
+                        self.driver.execute_script("arguments[0].scrollTop = 0;", container)
+                        time.sleep(0.3)
+                        for _ in range(4):
+                            self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollTop + arguments[0].clientHeight;", container)
+                            time.sleep(0.3)
+                        break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
         else:
             xpath_selectors = [
                 "//a[contains(@href, '/t/')]",  # Messenger thread links
@@ -172,25 +195,101 @@ class MessengerAgent:
                         enriched = []
                         for idx, el in enumerate(ordered):
                             try:
-                                # Determine click target
+                                # Determine click target; prefer nested link with /messages/t/
                                 click_target = el
                                 try:
-                                    link = el.find_element(By.XPATH, ".//a[@role='link']")
+                                    link = el.find_element(By.XPATH, ".//a[contains(@href, '/messages/t/')]")
                                     click_target = link
                                 except Exception:
-                                    pass
+                                    try:
+                                        link = el.find_element(By.XPATH, ".//a[@role='link']")
+                                        click_target = link
+                                    except Exception:
+                                        pass
+                                # Skip if el is a direct <a> but doesn't contain /messages/t/ (nav link)
+                                if el.tag_name == 'a':
+                                    href = el.get_attribute('href') or ''
+                                    if '/messages/t/' not in href:
+                                        continue
+                                # Also skip if no href found at all
+                                target_href = click_target.get_attribute('href') if hasattr(click_target, 'get_attribute') else ''
+                                if not target_href or '/messages/t/' not in target_href:
+                                    # If it's a row element, might still be valid if it has text
+                                    if el.tag_name not in ['div']:
+                                        continue
                                 # Heuristic: unread if aria-label mentions unread/new
                                 aria_labels = [
                                     (el.get_attribute("aria-label") or ""),
                                     (click_target.get_attribute("aria-label") or ""),
                                 ]
                                 all_aria = " ".join(aria_labels).lower()
-                                unread = any(w in all_aria for w in ["unread", "new message", "new messages", "new"])
+                                unread = any(w in all_aria for w in ["unread", "new message", "new messages", "new"]) 
+                                # Additional heuristics for unread: row text contains 'new message(s)'
                                 text_preview = (el.text or "").strip().replace("\n", " ")
+                                if ("new message" in text_preview.lower()) or ("new messages" in text_preview.lower()):
+                                    unread = True
+                                # Detect marketplace aggregate row like 'Marketplace 2 new messages'
+                                is_marketplace_group = False
+                                tp_low = text_preview.lower()
+                                if tp_low.startswith("marketplace") and ("new message" in tp_low or "new messages" in tp_low):
+                                    is_marketplace_group = True
+                                
+                                # Visual unread indicators: blue dot (background-color) and bold font-weight
+                                has_blue_dot = False
+                                has_bold_text = False
+                                try:
+                                    # Check for blue dot indicator (common in unread rows)
+                                    # Look for small circular elements with blue background
+                                    dots = el.find_elements(By.XPATH, ".//div | .//span")
+                                    for dot in dots[:20]:  # Limit search
+                                        try:
+                                            bg = self.driver.execute_script(
+                                                "return window.getComputedStyle(arguments[0]).backgroundColor;", dot
+                                            )
+                                            # Blue dot typically rgb(0, 132, 255) or similar
+                                            if bg and 'rgb' in bg.lower():
+                                                # Extract RGB values
+                                                import re
+                                                match = re.search(r'rgb\((\d+),\s*(\d+),\s*(\d+)', bg)
+                                                if match:
+                                                    r, g, b = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                                                    # Blue-ish: low red, moderate-high blue
+                                                    if r < 50 and b > 200:
+                                                        has_blue_dot = True
+                                                        break
+                                        except Exception:
+                                            continue
+                                except Exception:
+                                    pass
+                                
+                                # Bold font-weight detection on title spans
+                                try:
+                                    title_spans = el.find_elements(By.CSS_SELECTOR, "span[dir='auto']")
+                                    for title_span in title_spans[:3]:
+                                        fw = self.driver.execute_script(
+                                            "return window.getComputedStyle(arguments[0]).fontWeight;",
+                                            title_span,
+                                        )
+                                        try:
+                                            fw_num = int("" + str(fw))
+                                        except Exception:
+                                            fw_num = 400
+                                        if fw_num >= 600:
+                                            has_bold_text = True
+                                            break
+                                except Exception:
+                                    pass
+                                
+                                # Mark as unread if blue dot or bold text detected
+                                if has_blue_dot or has_bold_text:
+                                    unread = True
                                 enriched.append({
                                     "element": el,
                                     "click": click_target,
                                     "unread": unread,
+                                    "is_marketplace_group": is_marketplace_group,
+                                    "has_blue_dot": has_blue_dot,
+                                    "has_bold_text": has_bold_text,
                                     "text": text_preview,
                                     "aria": all_aria[:120],
                                     "idx": idx,
@@ -198,11 +297,20 @@ class MessengerAgent:
                             except Exception:
                                 continue
                         # Debug print the first few with flags
-                        for info in enriched[:5]:
-                            print(f"  [{info['idx']}] unread={info['unread']} text='{(info['text'] or '')[:80]}' aria~='{info['aria']}'")
+                        for info in enriched[:8]:
+                            print(f"  [{info['idx']}] unread={info['unread']} agg={info['is_marketplace_group']} dot={info['has_blue_dot']} bold={info['has_bold_text']} text='{(info['text'] or '')[:80]}'")
                         # Pick unread first; if none, keep original order
                         unread_items = [x for x in enriched if x["unread"]]
-                        chosen = unread_items if unread_items else enriched
+                        # Prefer non-aggregate unread threads over aggregate
+                        unread_non_agg = [x for x in unread_items if not x["is_marketplace_group"]]
+                        if unread_non_agg:
+                            chosen = unread_non_agg
+                        elif unread_items:
+                            chosen = unread_items
+                        else:
+                            # As a last resort, pick non-aggregate rows
+                            non_agg = [x for x in enriched if not x["is_marketplace_group"]]
+                            chosen = non_agg if non_agg else enriched
                         if chosen:
                             # Return the original elements in chosen order
                             return [x["element"] for x in chosen]
@@ -333,6 +441,15 @@ class MessengerAgent:
             current_url = self.driver.current_url
             print(f"📍 Conversation URL: {current_url}")
             
+            # If this is a Marketplace aggregate thread, try to drill down
+            try:
+                tid, buyer = self.get_thread_info()
+                if buyer and 'marketplace' in buyer.lower():
+                    print("🔎 In Marketplace aggregate; attempting to open first unread buyer thread…")
+                    self._open_first_unread_within_main()
+            except Exception:
+                pass
+            
         except Exception as e:
             print("⚠️ Failed to click a conversation:", e)
 
@@ -377,7 +494,7 @@ class MessengerAgent:
             print(f"⚠️ Error getting last message: {e}")
             return None
 
-    def send_message(self, text):
+    def send_message(self, text, send=True):
         """
         Type into the Messenger input box but DO NOT send yet (debug mode).
         """
@@ -406,40 +523,206 @@ class MessengerAgent:
             
             input_box.click()
             input_box.send_keys(text)
-            print(f"📝 (DEBUG) Would send: {text}")
+            if send:
+                input_box.send_keys(Keys.ENTER)
+                print(f"📤 Sent: {text}")
+            else:
+                print(f"📝 (DEBUG) Would send: {text}")
 
         except Exception as e:
             print("⚠️ Failed to type message:", e)
 
-    def process_conversations(self):
-        print("🔎 Checking conversations...")
+    def get_thread_info(self):
+        """Extract thread id from URL and buyer name from header if available."""
+        tid = None
+        name = None
+        try:
+            url = self.driver.current_url
+            p = urlparse(url)
+            # Expect /messages/e2ee/t/<id> or /messages/t/<id>
+            parts = [x for x in p.path.split('/') if x]
+            if 'messages' in parts and 't' in parts:
+                idx = parts.index('t')
+                if idx + 1 < len(parts):
+                    tid = parts[idx + 1]
+        except Exception:
+            pass
+        # Buyer name in header region
+        try:
+            header_selectors = [
+                "div[aria-label='Conversation Information'] h1 span[dir='auto']",
+                "header h2 span[dir='auto']",
+                "div[role='banner'] span[dir='auto']",
+            ]
+            for sel in header_selectors:
+                els = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in els:
+                    t = (el.text or '').strip()
+                    if t and len(t) > 1:
+                        name = t
+                        break
+                if name:
+                    break
+        except Exception:
+            pass
+        return tid, name
 
-        conversations = self.get_recent_conversations()
-        if not conversations:
+    def update_item_status(self, item, status: str):
+        try:
+            if not item:
+                return
+            # Support lowercase and Title-case keys
+            if 'status' in item:
+                item['status'] = status
+            else:
+                item['Status'] = status
+            self.inventory.save()
+            print(f"🗂️ Updated item status to {status}")
+        except Exception as e:
+            print(f"⚠️ Failed to update item status: {e}")
+
+    def infer_intent_and_reply(self, last_message: str, matched_item: dict):
+        """Simple rule-based intent + response. Placeholder for LLM integration."""
+        if not last_message:
+            return None
+        text = last_message.lower()
+
+        # Extract price offer if any
+        import re
+        offer = None
+        m = re.search(r"\$?\b(\d{2,4})\b", text)
+        if m:
+            try:
+                offer = int(m.group(1))
+            except Exception:
+                offer = None
+
+        # Read item pricing
+        price = None
+        bottom = None
+        if matched_item:
+            price = matched_item.get('price') or matched_item.get('Price')
+            bottom = matched_item.get('bottom') or matched_item.get('Bottom')
+
+        # Availability checks
+        if any(kw in text for kw in ["available", "still available", "is this still"]):
+            p = price if price is not None else "the listed"
+            return f"Yes, it's available. Price is {p}. Are you looking to pick up today or tomorrow?"
+
+        # Shipping inquiries
+        if any(kw in text for kw in ["ship", "shipping", "paypal", "mail"]):
+            return "I can ship via USPS and accept PayPal. What city/ZIP should I ship to?"
+
+        # Offers
+        if offer is not None and bottom is not None:
+            if offer < int(bottom):
+                return f"I can't go that low. I can do {bottom} if you can pick up. Interested?"
+            elif price is not None and int(bottom) <= offer < int(price):
+                return f"I can meet you at {offer}. When would you like to pick up?"
+            else:
+                return f"{offer} works for me. When would you like to pick up?"
+
+        # Generic scheduling
+        if any(kw in text for kw in ["pick up", "pickup", "today", "tomorrow", "when"]):
+            return "Great — I’m free this evening and tomorrow afternoon. What time works for you?"
+
+        # Fallback
+        title = matched_item.get('Title') or matched_item.get('title') if matched_item else None
+        if title:
+            return f"Hi! Yes, I’m the seller of '{title}'. Do you have any questions or would you like to make an offer?"
+        return "Hi! Do you have any questions or would you like to make an offer?"
+    def process_conversations(self, convos=None):
+        print("🔎 Checking conversations...")
+        # Use provided convos or scan for them
+        if not convos:
+            convos = self.get_recent_conversations(mode="messages")
+        if not convos:
             print("No conversations found.")
             return
 
-        # For debug: only open the first 3 conversations
-        for convo in conversations[:3]:
-            print("📨 Opening a conversation...")
-            self.open_conversation(convo)
+        # Click the first candidate (unread prioritized in get_recent_conversations)
+        target = convos[0]
+        print("📨 Opening conversation (prioritized)…")
+        self.open_conversation(target)
 
-            last_message = self.get_last_message()
-            print(f"📩 Last message: {last_message}")
+        last_message = self.get_last_message()
+        print(f"📩 Last message: {last_message}")
+        if not last_message:
+            return
 
-            if not last_message:
-                continue
+        # Thread info + state
+        thread_id, buyer_name = self.get_thread_info()
+        if buyer_name and self.state:
+            self.state.set_buyer_name(thread_id or "unknown", buyer_name)
+        print(f"🧵 Thread: id={thread_id} buyer={buyer_name}")
 
-            # Match item (debug: title match)
-            matched_item = self.inventory.get_item_by_title(last_message)
-            if matched_item:
-                print(f"✅ Matched item: {matched_item.get('Title', 'Unknown')}")
+        # Dedupe: only respond to new messages
+        if self.state and thread_id:
+            if not self.state.has_new_message(thread_id, last_message):
+                print("⛔ No new buyer message — skipping reply.")
+                return
 
-            # DEBUG: do not send yet
-            response = f"Thanks for reaching out! (DEBUG MODE) You said: '{last_message}'"
-            self.send_message(response)
+        # Match item by title tokens
+        matched_item = self.inventory.get_item_by_title(last_message)
+        if matched_item:
+            print(f"✅ Matched item: {(matched_item.get('Title') or matched_item.get('title') or 'Unknown')}")
+            # Update status to IN_CONVO
+            self.update_item_status(matched_item, "IN_CONVO")
+        else:
+            print("⚠️ Could not match item from message text")
 
-            time.sleep(2)
+        # Generate response (rule-based for now)
+        response = self.infer_intent_and_reply(last_message, matched_item)
+        if not response:
+            print("⚠️ No response generated")
+            return
+
+        # Send reply
+        self.send_message(response, send=True)
+
+        # Mark state after sending
+        if self.state and thread_id:
+            self.state.mark_seen_message(thread_id, last_message)
+        time.sleep(1)
+
+    def _open_first_unread_within_main(self):
+        """Inside a 'Marketplace' aggregate thread, try to find and open first unread buyer sub-thread."""
+        try:
+            main = None
+            try:
+                main = self.driver.find_element(By.XPATH, "//div[@role='main']")
+            except Exception:
+                pass
+            containers = [main] if main else [self.driver]
+            candidates = []
+            for root in containers:
+                try:
+                    links = root.find_elements(By.XPATH, 
+                        ".//a[@role='link' and contains(@href, '/messages/t/')]"
+                    )
+                    for a in links:
+                        txt = (a.text or '').strip().lower()
+                        aria = (a.get_attribute('aria-label') or '').lower()
+                        unread = any(k in txt for k in ['new message', 'new messages']) or any(k in aria for k in ['unread','new'])
+                        # Avoid links that are clearly the aggregate itself
+                        agg = 'marketplace' in txt and ('new message' in txt or 'new messages' in txt)
+                        candidates.append((a, unread, agg, txt[:80]))
+                except Exception:
+                    continue
+            # Prefer unread and non-aggregate
+            prio = [c for c in candidates if c[1] and not c[2]] or [c for c in candidates if c[1]] or [c for c in candidates if not c[2]]
+            if not prio:
+                print("⚠️ No sub-thread links found in main area.")
+                return
+            chosen = prio[0][0]
+            print("➡️ Opening sub-thread from aggregate…")
+            try:
+                chosen.click()
+            except Exception:
+                self.driver.execute_script("arguments[0].click();", chosen)
+            time.sleep(3)
+        except Exception as e:
+            print(f"⚠️ Drill-down failed: {e}")
 
 
 ###########################################################################
@@ -458,18 +741,31 @@ def main():
     agent.open_messenger()
 
     def single_pass():
-        agent.process_conversations()
-        # If marketplace scan found none, try messages fallback
-        print("🔁 Fallback: trying Messages page scan...")
+        # Skip Marketplace Inbox; go directly to Messages
+        print("➡️ Navigating directly to Messages page...")
         agent.open_messages()
         convos = agent.get_recent_conversations(mode="messages")
         if not convos:
-            print("⚠️ Still no conversations on Messages page.")
+            print("⚠️ No conversations found on Messages page.")
             return
-        # Open first found conversation on messages page
-        agent.open_conversation(convos[0])
-        last_msg = agent.get_last_message()
-        print(f"📩 Last message on Messages page: {last_msg}")
+        # If only aggregate found, try clicking it to expand, then re-scan
+        if len(convos) == 1:
+            first_text = (convos[0].text or '').lower()
+            if 'marketplace' in first_text and ('new message' in first_text or 'new messages' in first_text):
+                print("🔓 Clicking Marketplace aggregate to expand…")
+                try:
+                    convos[0].click()
+                    time.sleep(3)
+                    # Re-scan after expanding
+                    convos = agent.get_recent_conversations(mode="messages")
+                    if not convos:
+                        print("⚠️ Still no individual threads after expanding aggregate.")
+                        return
+                except Exception as e:
+                    print(f"⚠️ Failed to expand aggregate: {e}")
+                    return
+        # Process first conversation
+        agent.process_conversations(convos)
 
     if args.once:
         try:
