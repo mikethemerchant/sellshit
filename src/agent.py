@@ -455,40 +455,84 @@ class MessengerAgent:
 
     def get_last_message(self):
         """
-        Returns the last message text in the open conversation.
+        Returns the last message text from the BUYER (not seller) in the open conversation.
         """
         try:
             # Wait longer for conversation to load
             print("⏳ Waiting for conversation to load...")
             time.sleep(3)
             
-            # Try multiple selectors for messages - more specific to avoid timestamps
+            # Try to find message rows and determine which are from buyer vs seller
+            # Buyer messages are typically on the left, seller on the right
+            message_rows = self.driver.find_elements(By.CSS_SELECTOR, 'div[role="row"]')
+            
+            if not message_rows:
+                print("⚠️ No message rows found")
+                return None
+            
+            print(f"🔍 Found {len(message_rows)} message row elements")
+            
+            buyer_messages = []
+            
+            # Check each row to see if it's from buyer (left-aligned)
+            for row in message_rows:
+                try:
+                    # Get text content
+                    text_els = row.find_elements(By.CSS_SELECTOR, 'div[dir="auto"]')
+                    if not text_els:
+                        continue
+                    
+                    text = text_els[0].text.strip()
+                    if not text or len(text) <= 3:
+                        continue
+                    
+                    # Skip timestamps
+                    if text.lower() in ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'you', 'sent', 'delivered', 'seen']:
+                        continue
+                    
+                    # Check position: buyer messages are usually justify-start (left)
+                    # Seller messages are usually justify-end (right)
+                    row_style = self.driver.execute_script(
+                        "return window.getComputedStyle(arguments[0]).justifyContent;", row
+                    )
+                    
+                    # Also check parent/grandparent for alignment
+                    parent = row.find_element(By.XPATH, "..")
+                    parent_style = self.driver.execute_script(
+                        "return window.getComputedStyle(arguments[0]).justifyContent;", parent
+                    )
+                    
+                    # Left-aligned = buyer message
+                    is_buyer = ('start' in str(row_style).lower() or 'flex-start' in str(row_style).lower() or
+                               'start' in str(parent_style).lower() or 'flex-start' in str(parent_style).lower())
+                    
+                    if is_buyer:
+                        buyer_messages.append(text)
+                        
+                except Exception:
+                    continue
+            
+            if buyer_messages:
+                last_buyer_msg = buyer_messages[-1]
+                print(f"✉️ Last buyer message: {last_buyer_msg[:100]}")
+                return last_buyer_msg
+            
+            # Fallback: if can't determine alignment, get last message
+            print("⚠️ Could not determine buyer messages by alignment, using fallback...")
             message_selectors = [
-                'div[role="row"] div[dir="auto"]',  # Message rows
-                'div[data-scope="messages_table"] span',
-                'div[aria-label*="message"] span',
-                'span[dir="auto"]',  # Fallback to all spans
+                'div[role="row"] div[dir="auto"]',
             ]
             
             for selector in message_selectors:
                 messages = self.driver.find_elements(By.CSS_SELECTOR, selector)
                 if messages:
-                    print(f"🔍 Found {len(messages)} message elements with selector: {selector}")
-                    
-                    # Debug: print first few messages found
-                    for i, msg in enumerate(list(reversed(messages))[:10]):
-                        text = msg.text.strip()
-                        print(f"  [{i}] Text: '{text}' (len={len(text)})")
-                    
-                    # Get last non-empty message that's longer than 3 chars
                     for msg in reversed(messages):
                         text = msg.text.strip()
-                        # Skip very short text (timestamps) and common UI text
                         if text and len(text) > 3 and text.lower() not in ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']:
-                            print(f"✉️ Selected message: {text[:100]}")
+                            print(f"✉️ Fallback selected message: {text[:100]}")
                             return text
             
-            print("⚠️ No message text found with any selector")
+            print("⚠️ No message text found")
             return None
         except Exception as e:
             print(f"⚠️ Error getting last message: {e}")
@@ -820,33 +864,43 @@ def main():
         if len(convos) == 1:
             first_text = (convos[0].text or '').lower()
             if 'marketplace' in first_text and ('new message' in first_text or 'new messages' in first_text):
-                print("🔓 Detected Marketplace aggregate, scrolling to load individual threads…")
+                print("🔓 Detected Marketplace aggregate, clicking to enter Marketplace folder…")
                 try:
-                    # Instead of clicking, try to scroll the conversations list to force render
-                    for container_sel in ["//div[@aria-label='Chats']", "//div[@role='grid']", "//div[@role='list']"]:
-                        try:
-                            container = agent.driver.find_element(By.XPATH, container_sel)
-                            # Scroll down then back up to trigger render
-                            for _ in range(5):
-                                agent.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollTop + 200;", container)
-                                time.sleep(0.5)
-                            agent.driver.execute_script("arguments[0].scrollTop = 0;", container)
-                            time.sleep(2)
-                            break
-                        except Exception:
-                            continue
-                    # Re-scan after scrolling
+                    # Click the aggregate to navigate into Marketplace folder
+                    convos[0].click()
+                    time.sleep(4)
+                    
+                    # Now we're in Marketplace view, scan for ALL conversations
+                    # Force extensive scrolling to load all threads
+                    print("📜 Scrolling to load all Marketplace conversations...")
+                    try:
+                        for container_sel in ["//div[@aria-label='Chats']", "//div[@role='grid']"]:
+                            try:
+                                container = agent.driver.find_element(By.XPATH, container_sel)
+                                # Scroll to top first
+                                agent.driver.execute_script("arguments[0].scrollTop = 0;", container)
+                                time.sleep(1)
+                                # Then scroll down multiple times
+                                for i in range(10):
+                                    agent.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollTop + 300;", container)
+                                    time.sleep(0.3)
+                                # Scroll back to top to see unread
+                                agent.driver.execute_script("arguments[0].scrollTop = 0;", container)
+                                time.sleep(2)
+                                break
+                            except Exception:
+                                continue
+                    except Exception as e:
+                        print(f"⚠️ Scrolling error: {e}")
+                    
+                    # Re-scan for individual threads after scrolling
                     convos = agent.get_recent_conversations(mode="messages")
                     if not convos:
-                        print("⚠️ Still no individual threads after scrolling.")
+                        print("⚠️ No threads found after clicking aggregate.")
                         return
-                    # Filter out the aggregate row from the new list
-                    convos = [c for c in convos if 'marketplace' not in (c.text or '').lower() or ('new message' not in (c.text or '').lower())]
-                    if not convos:
-                        print("⚠️ Only aggregate row found, no individual threads.")
-                        return
+                    print(f"✅ Found {len(convos)} conversation(s) in Marketplace view")
                 except Exception as e:
-                    print(f"⚠️ Failed to load individual threads: {e}")
+                    print(f"⚠️ Failed to expand Marketplace aggregate: {e}")
                     return
         # Process first conversation
         agent.process_conversations(convos)
