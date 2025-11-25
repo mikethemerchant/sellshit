@@ -820,17 +820,33 @@ def main():
         if len(convos) == 1:
             first_text = (convos[0].text or '').lower()
             if 'marketplace' in first_text and ('new message' in first_text or 'new messages' in first_text):
-                print("🔓 Clicking Marketplace aggregate to expand…")
+                print("🔓 Detected Marketplace aggregate, scrolling to load individual threads…")
                 try:
-                    convos[0].click()
-                    time.sleep(3)
-                    # Re-scan after expanding
+                    # Instead of clicking, try to scroll the conversations list to force render
+                    for container_sel in ["//div[@aria-label='Chats']", "//div[@role='grid']", "//div[@role='list']"]:
+                        try:
+                            container = agent.driver.find_element(By.XPATH, container_sel)
+                            # Scroll down then back up to trigger render
+                            for _ in range(5):
+                                agent.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollTop + 200;", container)
+                                time.sleep(0.5)
+                            agent.driver.execute_script("arguments[0].scrollTop = 0;", container)
+                            time.sleep(2)
+                            break
+                        except Exception:
+                            continue
+                    # Re-scan after scrolling
                     convos = agent.get_recent_conversations(mode="messages")
                     if not convos:
-                        print("⚠️ Still no individual threads after expanding aggregate.")
+                        print("⚠️ Still no individual threads after scrolling.")
+                        return
+                    # Filter out the aggregate row from the new list
+                    convos = [c for c in convos if 'marketplace' not in (c.text or '').lower() or ('new message' not in (c.text or '').lower())]
+                    if not convos:
+                        print("⚠️ Only aggregate row found, no individual threads.")
                         return
                 except Exception as e:
-                    print(f"⚠️ Failed to expand aggregate: {e}")
+                    print(f"⚠️ Failed to load individual threads: {e}")
                     return
         # Process first conversation
         agent.process_conversations(convos)
