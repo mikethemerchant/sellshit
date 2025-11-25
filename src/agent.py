@@ -836,6 +836,57 @@ class MessengerAgent:
         except Exception as e:
             print(f"⚠️ Drill-down failed: {e}")
 
+    def open_and_process_thread(self, thread_id: str):
+        """Navigate directly to a thread by ID and process if there's a new buyer message."""
+        try:
+            url = f"https://www.facebook.com/messages/t/{thread_id}/#"
+            self.driver.get(url)
+            time.sleep(3)
+            last_message = self.get_last_message()
+            if not last_message:
+                return False
+            tid, buyer_name, item_title_from_header = self.get_thread_info()
+            if buyer_name and self.state:
+                self.state.set_buyer_name(tid or thread_id, buyer_name)
+            if self.state and tid:
+                if not self.state.has_new_message(tid, last_message):
+                    return False
+            matched_item = None
+            if item_title_from_header:
+                matched_item = self.inventory.get_item_by_title(item_title_from_header)
+            if not matched_item:
+                matched_item = self.inventory.get_item_by_title(last_message)
+            if matched_item:
+                self.update_item_status(matched_item, "IN_CONVO")
+                if self.state and tid:
+                    item_id = matched_item.get('id') or matched_item.get('ID')
+                    if item_id:
+                        self.state.set_item_id(tid, item_id)
+            response = self.infer_intent_and_reply(last_message, matched_item)
+            if not response:
+                return False
+            self.send_message(response, send=True)
+            if self.state and tid:
+                self.state.mark_seen_message(tid, last_message)
+            time.sleep(1)
+            return True
+        except Exception:
+            return False
+
+    def process_first_unread_from_known_threads(self):
+        """Fallback: iterate stored thread IDs and respond to the first with a new buyer message."""
+        if not self.state or not getattr(self.state, 'state', None):
+            print("⚠️ No buyer_state available for fallback scanning")
+            return False
+        thread_ids = list(self.state.state.keys())
+        for tid in thread_ids[::-1]:
+            ok = self.open_and_process_thread(tid)
+            if ok:
+                print(f"✅ Processed unread message in stored thread {tid}")
+                return True
+        print("⚠️ No unread found across stored threads")
+        return False
+
 
 ###########################################################################
 # MAIN LOOP
@@ -860,47 +911,12 @@ def main():
         if not convos:
             print("⚠️ No conversations found on Messages page.")
             return
-        # If only aggregate found, try clicking it to expand, then re-scan
+        # If only aggregate found, use stored threads fallback to locate unread
         if len(convos) == 1:
             first_text = (convos[0].text or '').lower()
             if 'marketplace' in first_text and ('new message' in first_text or 'new messages' in first_text):
-                print("🔓 Detected Marketplace aggregate, clicking to enter Marketplace folder…")
-                try:
-                    # Click the aggregate to navigate into Marketplace folder
-                    convos[0].click()
-                    time.sleep(4)
-                    
-                    # Now we're in Marketplace view, scan for ALL conversations
-                    # Force extensive scrolling to load all threads
-                    print("📜 Scrolling to load all Marketplace conversations...")
-                    try:
-                        for container_sel in ["//div[@aria-label='Chats']", "//div[@role='grid']"]:
-                            try:
-                                container = agent.driver.find_element(By.XPATH, container_sel)
-                                # Scroll to top first
-                                agent.driver.execute_script("arguments[0].scrollTop = 0;", container)
-                                time.sleep(1)
-                                # Then scroll down multiple times
-                                for i in range(10):
-                                    agent.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollTop + 300;", container)
-                                    time.sleep(0.3)
-                                # Scroll back to top to see unread
-                                agent.driver.execute_script("arguments[0].scrollTop = 0;", container)
-                                time.sleep(2)
-                                break
-                            except Exception:
-                                continue
-                    except Exception as e:
-                        print(f"⚠️ Scrolling error: {e}")
-                    
-                    # Re-scan for individual threads after scrolling
-                    convos = agent.get_recent_conversations(mode="messages")
-                    if not convos:
-                        print("⚠️ No threads found after clicking aggregate.")
-                        return
-                    print(f"✅ Found {len(convos)} conversation(s) in Marketplace view")
-                except Exception as e:
-                    print(f"⚠️ Failed to expand Marketplace aggregate: {e}")
+                print("🔓 Aggregate detected; using stored threads fallback to locate unread…")
+                if agent.process_first_unread_from_known_threads():
                     return
         # Process first conversation
         agent.process_conversations(convos)
