@@ -40,10 +40,25 @@ class BuyerStateStore:
         self.state[thread_id] = entry
         self.save()
 
+    def mark_replied_to_message(self, thread_id: str, message_text: str):
+        """Mark that we've replied to this specific buyer message."""
+        entry = self.get_thread(thread_id)
+        entry["last_replied_hash"] = _hash_text(message_text)
+        entry["last_message_hash"] = _hash_text(message_text)
+        self.state[thread_id] = entry
+        self.save()
+
     def has_new_message(self, thread_id: str, message_text: str) -> bool:
         entry = self.get_thread(thread_id)
         prev = entry.get("last_message_hash")
         return prev != _hash_text(message_text)
+    
+    def needs_reply(self, thread_id: str, message_text: str) -> bool:
+        """Check if this buyer message needs a reply (hasn't been replied to yet)."""
+        entry = self.get_thread(thread_id)
+        last_replied = entry.get("last_replied_hash")
+        current_hash = _hash_text(message_text)
+        return last_replied != current_hash
 
     def set_buyer_name(self, thread_id: str, name: str):
         entry = self.get_thread(thread_id)

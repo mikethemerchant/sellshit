@@ -16,16 +16,19 @@
   "1745768319324111": {
     "buyer_name": "Chris",
     "item_id": 14,
-    "last_message_hash": "e4ff8025e1cb0b1d107869a38d5b984dea092a45e99f7870d65d0f7833b0d138"
+    "last_message_hash": "dce70fb4e72caa573eea1c23a6eb0e87bf2743e376b696d7536f9411a8a6f1c9",
+    "last_replied_hash": "dce70fb4e72caa573eea1c23a6eb0e87bf2743e376b696d7536f9411a8a6f1c9"
   },
   "1187271722897711": {
     "buyer_name": "Patch",
     "item_id": 82,
-    "last_message_hash": "ca03b6f741aa14b50fd08dba924059f18ee7fc0cc5aedbfad1bb5d1628ab65db"
+    "last_message_hash": "ca03b6f741aa14b50fd08dba924059f18ee7fc0cc5aedbfad1bb5d1628ab65db",
+    "last_replied_hash": "ca03b6f741aa14b50fd08dba924059f18ee7fc0cc5aedbfad1bb5d1628ab65db"
   },
   "5065340080357696": {
     "buyer_name": "Antonio",
     "last_message_hash": "c249dde3979a7e3b5d8597ddcd19435331c5d371976de7d45555254e6d7dee81",
-    "item_id": 82
+    "item_id": 82,
+    "last_replied_hash": "c249dde3979a7e3b5d8597ddcd19435331c5d371976de7d45555254e6d7dee81"
   }
 }

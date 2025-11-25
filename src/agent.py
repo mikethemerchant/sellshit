@@ -769,10 +769,10 @@ class MessengerAgent:
         if item_title_from_header:
             print(f"🏷️  Item from header: {item_title_from_header}")
 
-        # Dedupe: only respond to new messages
+        # Check if this message needs a reply
         if self.state and thread_id:
-            if not self.state.has_new_message(thread_id, last_message):
-                print("⛔ No new buyer message — skipping reply.")
+            if not self.state.needs_reply(thread_id, last_message):
+                print("⛔ Already replied to this message — skipping.")
                 return
 
         # Match item: prioritize header title, fallback to message text
@@ -807,9 +807,9 @@ class MessengerAgent:
         # Send reply
         self.send_message(response, send=True)
 
-        # Mark state after sending
+        # Mark that we've replied to this message
         if self.state and thread_id:
-            self.state.mark_seen_message(thread_id, last_message)
+            self.state.mark_replied_to_message(thread_id, last_message)
         time.sleep(1)
 
     def _open_first_unread_within_main(self):
@@ -900,7 +900,7 @@ class MessengerAgent:
             if buyer_name and self.state:
                 self.state.set_buyer_name(tid or thread_id, buyer_name)
             if self.state and tid:
-                if not self.state.has_new_message(tid, last_message):
+                if not self.state.needs_reply(tid, last_message):
                     return False
             matched_item = None
             if item_title_from_header:
@@ -918,7 +918,7 @@ class MessengerAgent:
                 return False
             self.send_message(response, send=True)
             if self.state and tid:
-                self.state.mark_seen_message(tid, last_message)
+                self.state.mark_replied_to_message(tid, last_message)
             time.sleep(1)
             return True
         except Exception:
