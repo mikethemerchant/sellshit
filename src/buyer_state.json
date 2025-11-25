@@ -1,10 +1,12 @@
 {
   "1476401086986855": {
-    "last_message_hash": "2802ede77dfc11d48be2a732868704a5ef8b37ebecb33f4102f84c8a7b789458"
+    "last_message_hash": "2802ede77dfc11d48be2a732868704a5ef8b37ebecb33f4102f84c8a7b789458",
+    "buyer_name": "Alex"
   },
   "3509688825837712": {
-    "last_message_hash": "d87774ac476321255f230695bbd9914a4edfc80c9ec09c8f0f3699b041919b4e",
-    "buyer_name": "WiFi"
+    "last_message_hash": "bb47b8ff5f623996f8f46b80933095a90e29a5bb4442ac09498c9e9e8fc1cbf4",
+    "buyer_name": "WiFi",
+    "item_id": 62
   },
   "1058253483035875": {
     "buyer_name": "Pisit",
@@ -20,5 +22,10 @@
     "buyer_name": "Patch",
     "item_id": 82,
     "last_message_hash": "ca03b6f741aa14b50fd08dba924059f18ee7fc0cc5aedbfad1bb5d1628ab65db"
+  },
+  "5065340080357696": {
+    "buyer_name": "Antonio",
+    "last_message_hash": "c249dde3979a7e3b5d8597ddcd19435331c5d371976de7d45555254e6d7dee81",
+    "item_id": 82
   }
 }

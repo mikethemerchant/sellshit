@@ -412,6 +412,13 @@ class MessengerAgent:
         Click a conversation item to open the message thread.
         """
         try:
+            # Debug: log what we're about to click
+            try:
+                elem_text = (convo_element.text or '').strip().replace('\n', ' ')[:100]
+                print(f"🖱️ About to click conversation element: '{elem_text}'")
+            except Exception:
+                pass
+            
             # Scroll into view first
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", convo_element)
             time.sleep(0.5)
@@ -748,9 +755,17 @@ class MessengerAgent:
 
         # Thread info + state (now includes item_title from header)
         thread_id, buyer_name, item_title_from_header = self.get_thread_info()
+        
+        # Check if this is a NEW buyer (not in buyer_state.json)
+        is_new_buyer = False
+        if self.state and thread_id:
+            if thread_id not in self.state.state:
+                is_new_buyer = True
+                print(f"🆕 NEW BUYER DETECTED! Thread: {thread_id} | Buyer: {buyer_name}")
+        
         if buyer_name and self.state:
             self.state.set_buyer_name(thread_id or "unknown", buyer_name)
-        print(f"🧵 Thread: id={thread_id} buyer={buyer_name}")
+        print(f"🧵 Thread: id={thread_id} buyer={buyer_name} {'(NEW)' if is_new_buyer else ''}")
         if item_title_from_header:
             print(f"🏷️  Item from header: {item_title_from_header}")
 
@@ -815,12 +830,48 @@ class MessengerAgent:
                     for a in links:
                         txt = (a.text or '').strip().lower()
                         aria = (a.get_attribute('aria-label') or '').lower()
-                        unread = any(k in txt for k in ['new message', 'new messages']) or any(k in aria for k in ['unread','new'])
+                        
+                        # Enhanced unread detection
+                        unread = False
+                        if any(k in txt for k in ['new message', 'new messages']) or any(k in aria for k in ['unread','new']):
+                            unread = True
+                        else:
+                            # Check for blue dot or bold text
+                            try:
+                                # Blue dot check
+                                dots = a.find_elements(By.XPATH, ".//div | .//span")
+                                for dot in dots[:5]:
+                                    bg = self.driver.execute_script("return window.getComputedStyle(arguments[0]).backgroundColor;", dot)
+                                    if bg and 'rgb' in bg.lower():
+                                        import re
+                                        match = re.search(r'rgb\((\d+),\s*(\d+),\s*(\d+)', bg)
+                                        if match:
+                                            r, g, b = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                                            if r < 50 and b > 200:
+                                                unread = True
+                                                break
+                                
+                                # Bold text check
+                                if not unread:
+                                    spans = a.find_elements(By.CSS_SELECTOR, "span[dir='auto']")
+                                    for sp in spans[:3]:
+                                        fw = self.driver.execute_script("return window.getComputedStyle(arguments[0]).fontWeight;", sp)
+                                        if fw and int(str(fw)) >= 600:
+                                            unread = True
+                                            break
+                            except Exception:
+                                pass
+
                         # Avoid links that are clearly the aggregate itself
                         agg = 'marketplace' in txt and ('new message' in txt or 'new messages' in txt)
                         candidates.append((a, unread, agg, txt[:80]))
                 except Exception:
                     continue
+            
+            print(f"🔍 Drill-down candidates: {len(candidates)}")
+            for i, c in enumerate(candidates):
+                print(f"  [{i}] unread={c[1]} agg={c[2]} text='{c[3]}'")
+
             # Prefer unread and non-aggregate
             prio = [c for c in candidates if c[1] and not c[2]] or [c for c in candidates if c[1]] or [c for c in candidates if not c[2]]
             if not prio:
